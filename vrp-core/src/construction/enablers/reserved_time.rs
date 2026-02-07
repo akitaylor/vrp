@@ -43,6 +43,13 @@ pub type ReservedTimesIndex = HashMap<Arc<Actor>, Vec<ReservedTimeSpan>>;
 /// time should be considered for planning.
 pub(crate) type ReservedTimesFn = Arc<dyn Fn(&Route, &TimeWindow) -> Option<ReservedTimeWindow> + Send + Sync>;
 
+struct ReservedTimesEntry {
+    indices: Vec<u64>,
+    intervals: Vec<ReservedTimeSpan>,
+    min_start: Timestamp,
+    max_end: Timestamp,
+}
+
 /// Provides way to calculate activity costs which might contain reserved time.
 pub struct DynamicActivityCost {
     reserved_times_fn: ReservedTimesFn,
@@ -393,7 +400,7 @@ pub(crate) fn create_reserved_times_fn(
     }
 
     let reserved_times = reserved_times_index.into_iter().try_fold(
-        HashMap::<_, (Vec<_>, Vec<_>)>::new(),
+        HashMap::<_, ReservedTimesEntry>::new(),
         |mut acc, (actor, mut times)| {
             // NOTE do not allow different types to simplify interval searching
             let are_same_types = times.windows(2).all(|pair| {
@@ -439,7 +446,18 @@ pub(crate) fn create_reserved_times_fn(
                         (start as u64, span)
                     })
                     .unzip();
-                acc.insert(actor, (indices, intervals));
+                let (min_start, max_end) = intervals.iter().fold(
+                    (Timestamp::MAX, Timestamp::MIN),
+                    |(min_start, max_end), reserved_time| {
+                        let start = match &reserved_time.time {
+                            TimeSpan::Window(time) => time.end,
+                            TimeSpan::Offset(time) => time.end,
+                        };
+                        let end = start + reserved_time.duration;
+                        (min_start.min(start), max_end.max(end))
+                    },
+                );
+                acc.insert(actor, ReservedTimesEntry { indices, intervals, min_start, max_end });
 
                 Ok(acc)
             } else {
@@ -451,20 +469,23 @@ pub(crate) fn create_reserved_times_fn(
     // NOTE: this function considers only latest time from reserved time
     //       reserved_time.time.start is ignored and should be handled by post processing
     Ok(Arc::new(move |route: &Route, time_window: &TimeWindow| {
-        reserved_times.get(&route.actor).and_then(|(indices, intervals)| {
+        reserved_times.get(&route.actor).and_then(|entry| {
             let offset = route.tour.start().map(|a| a.schedule.departure).unwrap_or(0.);
 
             // NOTE map external absolute time window to time span's start/end
-            let (interval_start, interval_end) = match intervals.first().map(|rt| &rt.time) {
+            let (interval_start, interval_end) = match entry.intervals.first().map(|rt| &rt.time) {
                 Some(TimeSpan::Offset(_)) => (time_window.start - offset, time_window.end - offset),
                 Some(TimeSpan::Window(_)) => (time_window.start, time_window.end),
                 _ => unreachable!(),
             };
+            if interval_end <= entry.min_start || interval_start >= entry.max_end {
+                return None;
+            }
 
-            match indices.binary_search(&(interval_start as u64)) {
-                Ok(idx) => intervals.get(idx),
+            match entry.indices.binary_search(&(interval_start as u64)) {
+                Ok(idx) => entry.intervals.get(idx),
                 Err(idx) => (idx.max(1) - 1..=idx) // NOTE left (earliest) wins
-                    .map(|idx| intervals.get(idx))
+                    .map(|idx| entry.intervals.get(idx))
                     .find(|reserved_time| {
                         reserved_time.is_some_and(|reserved_time| {
                             let (reserved_start, reserved_end) = match &reserved_time.time {
