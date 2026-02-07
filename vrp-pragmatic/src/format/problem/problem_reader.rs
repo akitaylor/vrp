@@ -8,7 +8,7 @@ use crate::validation::ValidationContext;
 use crate::{CoordIndex, parse_time};
 use vrp_core::construction::enablers::*;
 use vrp_core::models::Extras;
-use vrp_core::models::common::{TimeOffset, TimeSpan, TimeWindow};
+use vrp_core::models::common::{Cost, TimeOffset, TimeSpan, TimeWindow};
 use vrp_core::solver::processing::{ClusterConfigExtraProperty, ReservedTimesExtraProperty};
 
 pub(super) fn map_to_problem_with_approx(problem: ApiProblem) -> Result<CoreProblem, MultiFormatError> {
@@ -201,23 +201,47 @@ fn get_problem_blocks(
     )?;
     let activity: Arc<dyn ActivityCost> = Arc::new(OnlyVehicleActivityCost::default());
 
-    let (transport, activity) = if reserved_times_index.is_empty() {
-        (transport, activity)
+    let size = transport.size();
+    let actors_len = fleet.actors.len();
+    let bytes = actors_len
+        .saturating_mul(size)
+        .saturating_mul(size)
+        .saturating_mul(std::mem::size_of::<Cost>());
+
+    let transport_impl = if reserved_times_index.is_empty() {
+        "PrecomputedActorCostTransportCost (no reserved time)"
     } else {
-        DynamicTransportCost::new(reserved_times_index.clone(), transport)
-            .and_then(|transport| {
-                DynamicActivityCost::new(reserved_times_index.clone()).map(|activity| (transport, activity))
-            })
+        "PrecomputedActorCostTransportCost + DynamicActivityCost (reserved time)"
+    };
+    (environment.logger)(format!(
+        "using transport cost: {transport_impl}; actors={actors_len}, locations={size}, base_costs≈{} MB",
+        bytes as f64 / (1024.0 * 1024.0)
+    )
+    .as_str());
+
+    let precomputed_transport =
+        PrecomputedActorCostTransportCost::new(reserved_times_index.clone(), transport, fleet.actors.clone())
             .map_err(|err| {
                 vec![FormatError::new(
                     "E0002".to_string(),
                     "cannot create transport costs".to_string(),
                     format!("check fleet definition: '{err}'"),
                 )]
-            })
-            .map::<(Arc<dyn TransportCost>, Arc<dyn ActivityCost>), _>(|(transport, activity)| {
-                (Arc::new(transport), Arc::new(activity))
-            })?
+            })?;
+
+    let transport: Arc<dyn TransportCost> = Arc::new(precomputed_transport);
+    let activity: Arc<dyn ActivityCost> = if reserved_times_index.is_empty() {
+        activity
+    } else {
+        let activity = DynamicActivityCost::new(reserved_times_index.clone()).map_err(|err| {
+            vec![FormatError::new(
+                "E0002".to_string(),
+                "cannot create transport costs".to_string(),
+                format!("check fleet definition: '{err}'"),
+            )]
+        })?;
+
+        Arc::new(activity)
     };
 
     let (jobs, locks) = read_jobs_with_extra_locks(

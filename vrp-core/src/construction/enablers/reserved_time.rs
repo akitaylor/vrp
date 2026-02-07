@@ -153,6 +153,105 @@ impl TransportCost for DynamicTransportCost {
     }
 }
 
+/// Provides way to calculate transport costs using precomputed per-actor costs.
+/// Reserved time is still applied at runtime to keep correctness with breaks.
+pub struct PrecomputedActorCostTransportCost {
+    reserved_times_fn: ReservedTimesFn,
+    inner: Arc<dyn TransportCost>,
+    actor_index: HashMap<Arc<Actor>, usize>,
+    base_costs: Vec<Vec<Cost>>,
+    size: usize,
+}
+
+impl PrecomputedActorCostTransportCost {
+    /// Creates a new instance of `PrecomputedActorCostTransportCost`.
+    pub fn new(
+        reserved_times_index: ReservedTimesIndex,
+        inner: Arc<dyn TransportCost>,
+        actors: Vec<Arc<Actor>>,
+    ) -> Result<Self, GenericError> {
+        let reserved_times_fn = create_reserved_times_fn(reserved_times_index)?;
+        let size = inner.size();
+
+        let mut actor_index = HashMap::with_capacity(actors.len());
+        let mut base_costs = Vec::with_capacity(actors.len());
+
+        for (idx, actor) in actors.into_iter().enumerate() {
+            actor_index.insert(actor.clone(), idx);
+
+            let rate_distance = actor.driver.costs.per_distance + actor.vehicle.costs.per_distance;
+            let rate_time = actor.driver.costs.per_driving_time + actor.vehicle.costs.per_driving_time;
+
+            let mut costs = Vec::with_capacity(size * size);
+            for from in 0..size {
+                for to in 0..size {
+                    let distance = inner.distance_approx(&actor.vehicle.profile, from, to);
+                    let duration = inner.duration_approx(&actor.vehicle.profile, from, to);
+                    costs.push(distance * rate_distance + duration * rate_time);
+                }
+            }
+            base_costs.push(costs);
+        }
+
+        Ok(Self { reserved_times_fn, inner, actor_index, base_costs, size })
+    }
+
+    fn get_base_cost(&self, route: &Route, from: Location, to: Location) -> Cost {
+        self.actor_index
+            .get(&route.actor)
+            .and_then(|idx| self.base_costs.get(*idx))
+            .and_then(|costs| costs.get(from * self.size + to))
+            .copied()
+            .unwrap_or_else(|| self.inner.cost(route, from, to, TravelTime::Departure(0.)))
+    }
+
+    fn get_reserved_extra_duration(
+        &self,
+        route: &Route,
+        travel_time: TravelTime,
+        base_duration: Duration,
+    ) -> Duration {
+        let time_window = match travel_time {
+            TravelTime::Arrival(arrival) => TimeWindow::new(arrival - base_duration, arrival),
+            TravelTime::Departure(departure) => TimeWindow::new(departure, departure + base_duration),
+        };
+
+        (self.reserved_times_fn)(route, &time_window).map_or(0., |reserved_time| reserved_time.duration)
+    }
+}
+
+impl TransportCost for PrecomputedActorCostTransportCost {
+    fn cost(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Cost {
+        let base_cost = self.get_base_cost(route, from, to);
+        let base_duration = self.inner.duration(route, from, to, travel_time);
+        let extra_duration = self.get_reserved_extra_duration(route, travel_time, base_duration);
+
+        let rate_time = route.actor.driver.costs.per_driving_time + route.actor.vehicle.costs.per_driving_time;
+        base_cost + extra_duration * rate_time
+    }
+
+    fn duration_approx(&self, profile: &Profile, from: Location, to: Location) -> Duration {
+        self.inner.duration_approx(profile, from, to)
+    }
+
+    fn distance_approx(&self, profile: &Profile, from: Location, to: Location) -> Distance {
+        self.inner.distance_approx(profile, from, to)
+    }
+
+    fn duration(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Duration {
+        let base_duration = self.inner.duration(route, from, to, travel_time);
+        base_duration + self.get_reserved_extra_duration(route, travel_time, base_duration)
+    }
+
+    fn distance(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Distance {
+        self.inner.distance(route, from, to, travel_time)
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+}
+
 /// Optimizes reserved time schedules by rescheduling it to earlier time (e.g. to avoid transit stops,
 /// reduce waiting time).
 pub(crate) fn optimize_reserved_times_schedule(route: &mut Route, reserved_times_fn: &ReservedTimesFn) {
