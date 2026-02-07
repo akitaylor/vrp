@@ -7,6 +7,7 @@ use crate::models::problem::{ActivityCost, Actor, TransportCost, TravelTime};
 use crate::models::solution::{Activity, Route};
 use rosomaxa::prelude::GenericError;
 use std::collections::HashMap;
+use std::mem;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -160,7 +161,24 @@ pub struct PrecomputedActorCostTransportCost {
     inner: Arc<dyn TransportCost>,
     actor_index: HashMap<Arc<Actor>, usize>,
     base_costs: Vec<Vec<Cost>>,
+    durations: Vec<Vec<Duration>>,
+    distances: Vec<Vec<Distance>>,
     size: usize,
+    use_precomputed: bool,
+}
+
+/// Summarizes memory footprint of precomputed transport tables.
+pub struct PrecomputedActorCostStats {
+    /// Number of profiles with precomputed matrices.
+    pub profile_count: usize,
+    /// Matrix dimension (locations count).
+    pub size: usize,
+    /// Bytes used by precomputed durations.
+    pub duration_bytes: usize,
+    /// Bytes used by precomputed distances.
+    pub distance_bytes: usize,
+    /// Bytes used by precomputed per-actor base costs.
+    pub base_cost_bytes: usize,
 }
 
 impl PrecomputedActorCostTransportCost {
@@ -169,9 +187,30 @@ impl PrecomputedActorCostTransportCost {
         reserved_times_index: ReservedTimesIndex,
         inner: Arc<dyn TransportCost>,
         actors: Vec<Arc<Actor>>,
+        use_precomputed: bool,
     ) -> Result<Self, GenericError> {
         let reserved_times_fn = create_reserved_times_fn(reserved_times_index)?;
         let size = inner.size();
+
+        let max_profile = actors.iter().map(|actor| actor.vehicle.profile.index).max().unwrap_or(0);
+        let mut durations = vec![Vec::new(); max_profile + 1];
+        let mut distances = vec![Vec::new(); max_profile + 1];
+
+        for actor in actors.iter() {
+            let profile = &actor.vehicle.profile;
+            if !durations.get(profile.index).is_some_and(|data| !data.is_empty()) {
+                let mut profile_durations = Vec::with_capacity(size * size);
+                let mut profile_distances = Vec::with_capacity(size * size);
+                for from in 0..size {
+                    for to in 0..size {
+                        profile_durations.push(inner.duration_approx(profile, from, to));
+                        profile_distances.push(inner.distance_approx(profile, from, to));
+                    }
+                }
+                durations[profile.index] = profile_durations;
+                distances[profile.index] = profile_distances;
+            }
+        }
 
         let mut actor_index = HashMap::with_capacity(actors.len());
         let mut base_costs = Vec::with_capacity(actors.len());
@@ -183,17 +222,28 @@ impl PrecomputedActorCostTransportCost {
             let rate_time = actor.driver.costs.per_driving_time + actor.vehicle.costs.per_driving_time;
 
             let mut costs = Vec::with_capacity(size * size);
-            for from in 0..size {
-                for to in 0..size {
-                    let distance = inner.distance_approx(&actor.vehicle.profile, from, to);
-                    let duration = inner.duration_approx(&actor.vehicle.profile, from, to);
-                    costs.push(distance * rate_distance + duration * rate_time);
+            let profile_idx = actor.vehicle.profile.index;
+            if let (Some(profile_distances), Some(profile_durations)) =
+                (distances.get(profile_idx), durations.get(profile_idx))
+            {
+                if !profile_distances.is_empty() && !profile_durations.is_empty() {
+                    for idx in 0..profile_distances.len() {
+                        costs.push(profile_distances[idx] * rate_distance + profile_durations[idx] * rate_time);
+                    }
+                } else {
+                    for from in 0..size {
+                        for to in 0..size {
+                            let distance = inner.distance_approx(&actor.vehicle.profile, from, to);
+                            let duration = inner.duration_approx(&actor.vehicle.profile, from, to);
+                            costs.push(distance * rate_distance + duration * rate_time);
+                        }
+                    }
                 }
             }
             base_costs.push(costs);
         }
 
-        Ok(Self { reserved_times_fn, inner, actor_index, base_costs, size })
+        Ok(Self { reserved_times_fn, inner, actor_index, base_costs, durations, distances, size, use_precomputed })
     }
 
     fn get_base_cost(&self, route: &Route, from: Location, to: Location) -> Cost {
@@ -203,6 +253,38 @@ impl PrecomputedActorCostTransportCost {
             .and_then(|costs| costs.get(from * self.size + to))
             .copied()
             .unwrap_or_else(|| self.inner.cost(route, from, to, TravelTime::Departure(0.)))
+    }
+
+    fn get_precomputed_duration(&self, profile: &Profile, from: Location, to: Location) -> Option<Duration> {
+        self.durations
+            .get(profile.index)
+            .filter(|data| !data.is_empty())
+            .and_then(|durations| durations.get(from * self.size + to))
+            .copied()
+    }
+
+    fn get_precomputed_distance(&self, profile: &Profile, from: Location, to: Location) -> Option<Distance> {
+        self.distances
+            .get(profile.index)
+            .filter(|data| !data.is_empty())
+            .and_then(|distances| distances.get(from * self.size + to))
+            .copied()
+    }
+
+    /// Returns a summary of precomputed table sizes.
+    pub fn stats(&self) -> PrecomputedActorCostStats {
+        let duration_len = self.durations.iter().map(|data| data.len()).sum::<usize>();
+        let distance_len = self.distances.iter().map(|data| data.len()).sum::<usize>();
+        let base_cost_len = self.base_costs.iter().map(|data| data.len()).sum::<usize>();
+        let profile_count = self.durations.iter().filter(|data| !data.is_empty()).count();
+
+        PrecomputedActorCostStats {
+            profile_count,
+            size: self.size,
+            duration_bytes: duration_len * mem::size_of::<Duration>(),
+            distance_bytes: distance_len * mem::size_of::<Distance>(),
+            base_cost_bytes: base_cost_len * mem::size_of::<Cost>(),
+        }
     }
 
     fn get_reserved_extra_duration(
@@ -223,7 +305,12 @@ impl PrecomputedActorCostTransportCost {
 impl TransportCost for PrecomputedActorCostTransportCost {
     fn cost(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Cost {
         let base_cost = self.get_base_cost(route, from, to);
-        let base_duration = self.inner.duration(route, from, to, travel_time);
+        let base_duration = if self.use_precomputed {
+            self.get_precomputed_duration(&route.actor.vehicle.profile, from, to)
+                .unwrap_or_else(|| self.inner.duration(route, from, to, travel_time))
+        } else {
+            self.inner.duration(route, from, to, travel_time)
+        };
         let extra_duration = self.get_reserved_extra_duration(route, travel_time, base_duration);
 
         let rate_time = route.actor.driver.costs.per_driving_time + route.actor.vehicle.costs.per_driving_time;
@@ -231,20 +318,31 @@ impl TransportCost for PrecomputedActorCostTransportCost {
     }
 
     fn duration_approx(&self, profile: &Profile, from: Location, to: Location) -> Duration {
-        self.inner.duration_approx(profile, from, to)
+        self.get_precomputed_duration(profile, from, to).unwrap_or_else(|| self.inner.duration_approx(profile, from, to))
     }
 
     fn distance_approx(&self, profile: &Profile, from: Location, to: Location) -> Distance {
-        self.inner.distance_approx(profile, from, to)
+        self.get_precomputed_distance(profile, from, to)
+            .unwrap_or_else(|| self.inner.distance_approx(profile, from, to))
     }
 
     fn duration(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Duration {
-        let base_duration = self.inner.duration(route, from, to, travel_time);
+        let base_duration = if self.use_precomputed {
+            self.get_precomputed_duration(&route.actor.vehicle.profile, from, to)
+                .unwrap_or_else(|| self.inner.duration(route, from, to, travel_time))
+        } else {
+            self.inner.duration(route, from, to, travel_time)
+        };
         base_duration + self.get_reserved_extra_duration(route, travel_time, base_duration)
     }
 
     fn distance(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Distance {
-        self.inner.distance(route, from, to, travel_time)
+        if self.use_precomputed {
+            self.get_precomputed_distance(&route.actor.vehicle.profile, from, to)
+                .unwrap_or_else(|| self.inner.distance(route, from, to, travel_time))
+        } else {
+            self.inner.distance(route, from, to, travel_time)
+        }
     }
 
     fn size(&self) -> usize {

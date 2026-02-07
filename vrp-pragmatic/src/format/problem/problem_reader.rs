@@ -196,6 +196,8 @@ fn get_problem_blocks(
     let fleet = read_fleet(api_problem, problem_props, &coord_index, skill_index.as_ref());
     let reserved_times_index = read_reserved_times_index(api_problem, &fleet);
 
+    let is_time_agnostic = matrices.iter().all(|matrix| matrix.timestamp.is_none());
+
     let transport = Timer::measure_duration_with_callback(
         || {
             create_transport_costs(api_problem, &matrices, coord_index.clone()).map_err(|err| {
@@ -230,8 +232,12 @@ fn get_problem_blocks(
     )
     .as_str());
 
-    let precomputed_transport =
-        PrecomputedActorCostTransportCost::new(reserved_times_index.clone(), transport, fleet.actors.clone())
+    let precomputed_transport = PrecomputedActorCostTransportCost::new(
+        reserved_times_index.clone(),
+        transport,
+        fleet.actors.clone(),
+        is_time_agnostic,
+    )
             .map_err(|err| {
                 vec![FormatError::new(
                     "E0002".to_string(),
@@ -239,6 +245,17 @@ fn get_problem_blocks(
                     format!("check fleet definition: '{err}'"),
                 )]
             })?;
+    let stats = precomputed_transport.stats();
+    (environment.logger)(format!(
+        "transport precompute: profiles={}, locations={}, durations≈{} MB, distances≈{} MB, base_costs≈{} MB, use_precomputed={}",
+        stats.profile_count,
+        stats.size,
+        stats.duration_bytes as f64 / (1024.0 * 1024.0),
+        stats.distance_bytes as f64 / (1024.0 * 1024.0),
+        stats.base_cost_bytes as f64 / (1024.0 * 1024.0),
+        is_time_agnostic
+    )
+    .as_str());
 
     let transport: Arc<dyn TransportCost> = Arc::new(precomputed_transport);
     let activity: Arc<dyn ActivityCost> = if reserved_times_index.is_empty() {
