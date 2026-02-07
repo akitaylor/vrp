@@ -53,6 +53,10 @@ impl SkillIndex {
         if bits.is_empty() { None } else { Some(VehicleSkillsBitset { bits }) }
     }
 
+    pub(super) fn stats(&self) -> (usize, usize) {
+        (self.index.len(), self.bits_len)
+    }
+
     fn build_bits(&self, skills: Option<&Vec<String>>) -> Vec<u64> {
         match skills {
             Some(skills) if !skills.is_empty() => {

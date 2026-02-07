@@ -223,6 +223,8 @@ impl ProblemBuilder {
             return Err("empty list of vehicles: specify at least one vehicle".into());
         }
 
+        let logger = self.logger.take().unwrap_or_else(|| Arc::new(|msg| println!("{msg}")));
+
         // analyze user input
         let transport = self.transport.take().ok_or_else(|| {
             GenericError::from("no information about routing data: use 'with_transport_cost' method to specify it")
@@ -234,7 +236,13 @@ impl ProblemBuilder {
             .ok_or_else(|| GenericError::from("unknown goal of optimization: use 'with_goal' method to set it"))?;
         let extras = self.extras.take().unwrap_or_else(|| Arc::new(Extras::default()));
 
-        apply_skill_bitsets(&mut self.jobs, &mut self.vehicles);
+        if let Some(stats) = apply_skill_bitsets(&mut self.jobs, &mut self.vehicles) {
+            (logger)(format!(
+                "skills: bitset enabled; skills={}, bits={}, jobs={}, vehicles={}",
+                stats.skill_count, stats.bitset_len, stats.job_count, stats.vehicle_count
+            )
+            .as_str());
+        }
 
         // setup fleet
         // NOTE: driver concept is not fully supported yet, but we must provide at least one.
@@ -242,8 +250,6 @@ impl ProblemBuilder {
         let vehicles = self.vehicles.into_iter().map(Arc::new).collect();
         let group_key = self.group_key_fn.take().unwrap_or_else(|| Box::new(|_| Box::new(|a| a.vehicle.profile.index)));
         let fleet = Arc::new(Fleet::new(vec![driver], vehicles, group_key));
-
-        let logger = self.logger.unwrap_or_else(|| Arc::new(|msg| println!("{msg}")));
 
         // setup jobs
         let jobs = Arc::new(Jobs::new(fleet.as_ref(), self.jobs, transport.as_ref(), &logger)?);

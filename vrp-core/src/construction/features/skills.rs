@@ -41,6 +41,13 @@ pub struct VehicleSkillsBitset {
     pub bits: Vec<u64>,
 }
 
+pub(crate) struct SkillBitsetStats {
+    pub skill_count: usize,
+    pub bitset_len: usize,
+    pub job_count: usize,
+    pub vehicle_count: usize,
+}
+
 impl JobSkills {
     /// Creates a new instance of [`JobSkills`].
     pub fn new(all_of: Option<Vec<String>>, one_of: Option<Vec<String>>, none_of: Option<Vec<String>>) -> Self {
@@ -51,15 +58,20 @@ impl JobSkills {
     }
 }
 
-pub(crate) fn apply_skill_bitsets(jobs: &mut [Job], vehicles: &mut [Vehicle]) {
+pub(crate) fn apply_skill_bitsets(jobs: &mut [Job], vehicles: &mut [Vehicle]) -> Option<SkillBitsetStats> {
     let mut skill_index: HashMap<String, usize> = HashMap::new();
     let mut insert_skill = |skill: &str| {
         let next = skill_index.len();
         skill_index.entry(skill.to_string()).or_insert(next);
     };
+    let mut job_count = 0;
+    let mut vehicle_count = 0;
 
     for vehicle in vehicles.iter() {
         if let Some(skills) = vehicle.dimens.get_vehicle_skills() {
+            if !skills.is_empty() {
+                vehicle_count += 1;
+            }
             for skill in skills {
                 insert_skill(skill);
             }
@@ -68,68 +80,91 @@ pub(crate) fn apply_skill_bitsets(jobs: &mut [Job], vehicles: &mut [Vehicle]) {
 
     for job in jobs.iter() {
         if let Some(job_skills) = job.dimens().get_job_skills() {
+            let mut has_any = false;
             if let Some(skills) = job_skills.all_of.as_ref() {
+                if !skills.is_empty() {
+                    has_any = true;
+                }
                 for skill in skills {
                     insert_skill(skill);
                 }
             }
             if let Some(skills) = job_skills.one_of.as_ref() {
+                if !skills.is_empty() {
+                    has_any = true;
+                }
                 for skill in skills {
                     insert_skill(skill);
                 }
             }
             if let Some(skills) = job_skills.none_of.as_ref() {
+                if !skills.is_empty() {
+                    has_any = true;
+                }
                 for skill in skills {
                     insert_skill(skill);
                 }
+            }
+            if has_any {
+                job_count += 1;
             }
         }
     }
 
     if skill_index.is_empty() {
-        return;
+        return None;
     }
 
     let bits_len = (skill_index.len() + 63) / 64;
 
     for vehicle in vehicles.iter_mut() {
+        let mut bits = vec![0u64; bits_len];
         if let Some(skills) = vehicle.dimens.get_vehicle_skills() {
-            let mut bits = vec![0u64; bits_len];
             for skill in skills {
                 if let Some(&idx) = skill_index.get(skill) {
                     bits[idx / 64] |= 1u64 << (idx % 64);
                 }
             }
-            vehicle.dimens.set_vehicle_skills_bitset(VehicleSkillsBitset { bits });
         }
+        vehicle.dimens.set_vehicle_skills_bitset(VehicleSkillsBitset { bits });
     }
 
     for job in jobs.iter_mut() {
-        let bitset = match job.dimens().get_job_skills() {
-            Some(job_skills) => {
-                let all_of = build_bits(job_skills.all_of.as_ref(), &skill_index, bits_len);
-                let one_of = build_bits(job_skills.one_of.as_ref(), &skill_index, bits_len);
-                let none_of = build_bits(job_skills.none_of.as_ref(), &skill_index, bits_len);
-                Some(JobSkillsBitset { all_of, one_of, none_of })
-            }
-            None => None,
+        let Some(job_skills) = job.dimens().get_job_skills() else {
+            continue;
         };
+        let has_any = job_skills.all_of.as_ref().map_or(false, |s| !s.is_empty())
+            || job_skills.one_of.as_ref().map_or(false, |s| !s.is_empty())
+            || job_skills.none_of.as_ref().map_or(false, |s| !s.is_empty());
+        if !has_any {
+            continue;
+        }
 
-        if let Some(bitset) = bitset {
-            match job {
-                Job::Single(single) => {
-                    if let Some(single) = Arc::get_mut(single) {
-                        single.dimens.set_job_skills_bitset(bitset);
-                    }
+        let all_of = build_bits(job_skills.all_of.as_ref(), &skill_index, bits_len);
+        let one_of = build_bits(job_skills.one_of.as_ref(), &skill_index, bits_len);
+        let none_of = build_bits(job_skills.none_of.as_ref(), &skill_index, bits_len);
+        let bitset = JobSkillsBitset { all_of, one_of, none_of };
+
+        match job {
+            Job::Single(single) => {
+                if let Some(single) = Arc::get_mut(single) {
+                    single.dimens.set_job_skills_bitset(bitset);
                 }
-                Job::Multi(multi) => {
-                    if let Some(multi) = Arc::get_mut(multi) {
-                        multi.dimens.set_job_skills_bitset(bitset);
-                    }
+            }
+            Job::Multi(multi) => {
+                if let Some(multi) = Arc::get_mut(multi) {
+                    multi.dimens.set_job_skills_bitset(bitset);
                 }
             }
         }
     }
+
+    Some(SkillBitsetStats {
+        skill_count: skill_index.len(),
+        bitset_len: bits_len,
+        job_count,
+        vehicle_count,
+    })
 }
 
 /// Creates a skills feature as hard constraint.

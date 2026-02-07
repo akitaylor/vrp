@@ -188,6 +188,10 @@ fn get_problem_blocks(
     } else {
         None
     };
+    if let Some(skill_index) = skill_index.as_ref() {
+        let (skills, bits) = skill_index.stats();
+        (environment.logger)(format!("skills: bitset enabled; skills={skills}, bits={bits}").as_str());
+    }
 
     let fleet = read_fleet(api_problem, problem_props, &coord_index, skill_index.as_ref());
     let reserved_times_index = read_reserved_times_index(api_problem, &fleet);
