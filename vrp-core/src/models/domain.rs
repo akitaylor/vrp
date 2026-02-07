@@ -1,3 +1,4 @@
+use crate::construction::features::apply_skill_bitsets;
 use crate::construction::heuristics::UnassignmentInfo;
 use crate::models::common::{Cost, Location};
 use crate::models::problem::*;
@@ -232,6 +233,8 @@ impl ProblemBuilder {
             .take()
             .ok_or_else(|| GenericError::from("unknown goal of optimization: use 'with_goal' method to set it"))?;
         let extras = self.extras.take().unwrap_or_else(|| Arc::new(Extras::default()));
+
+        apply_skill_bitsets(&mut self.jobs, &mut self.vehicles);
 
         // setup fleet
         // NOTE: driver concept is not fully supported yet, but we must provide at least one.

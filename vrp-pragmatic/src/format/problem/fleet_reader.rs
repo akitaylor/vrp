@@ -3,13 +3,16 @@
 mod fleet_reader_test;
 
 use super::*;
+use super::skills_index::SkillIndex;
 use crate::Location as ApiLocation;
 use crate::format::UnknownLocationFallback;
 use crate::get_unique_locations;
 use crate::utils::get_approx_transportation;
 use std::collections::HashSet;
 use vrp_core::construction::enablers::create_typed_actor_groups;
-use vrp_core::construction::features::{VehicleCapacityDimension, VehicleSkillsDimension};
+use vrp_core::construction::features::{
+    VehicleCapacityDimension, VehicleSkillsBitsetDimension, VehicleSkillsDimension,
+};
 use vrp_core::models::common::*;
 use vrp_core::models::problem::*;
 
@@ -95,7 +98,12 @@ pub(super) fn create_transport_costs(
     }
 }
 
-pub(super) fn read_fleet(api_problem: &ApiProblem, props: &ProblemProperties, coord_index: &CoordIndex) -> CoreFleet {
+pub(super) fn read_fleet(
+    api_problem: &ApiProblem,
+    props: &ProblemProperties,
+    coord_index: &CoordIndex,
+    skill_index: Option<&SkillIndex>,
+) -> CoreFleet {
     let profile_indices = get_profile_index_map(api_problem);
     let mut vehicles: Vec<Arc<Vehicle>> = Default::default();
 
@@ -158,6 +166,11 @@ pub(super) fn read_fleet(api_problem: &ApiProblem, props: &ProblemProperties, co
 
                 if let Some(skills) = vehicle.skills.as_ref() {
                     dimens.set_vehicle_skills(skills.iter().cloned().collect::<HashSet<_>>());
+                    if let Some(skill_index) = skill_index {
+                        if let Some(bits) = skill_index.make_vehicle_bitset(&vehicle.skills) {
+                            dimens.set_vehicle_skills_bitset(bits);
+                        }
+                    }
                 }
 
                 vehicles.push(Arc::new(Vehicle {

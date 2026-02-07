@@ -3,6 +3,7 @@ use crate::format::problem::clustering_reader::create_cluster_config;
 use crate::format::problem::fleet_reader::*;
 use crate::format::problem::goal_reader::create_goal_context;
 use crate::format::problem::job_reader::{read_jobs_with_extra_locks, read_locks};
+use crate::format::problem::skills_index::SkillIndex;
 use crate::format::{FormatError, JobIndex};
 use crate::validation::ValidationContext;
 use crate::{CoordIndex, parse_time};
@@ -182,7 +183,13 @@ fn get_problem_blocks(
     // TODO pass environment from outside to allow parametrization
     let environment = Environment::default();
 
-    let fleet = read_fleet(api_problem, problem_props, &coord_index);
+    let skill_index = if problem_props.has_skills {
+        SkillIndex::new(api_problem)
+    } else {
+        None
+    };
+
+    let fleet = read_fleet(api_problem, problem_props, &coord_index, skill_index.as_ref());
     let reserved_times_index = read_reserved_times_index(api_problem, &fleet);
 
     let transport = Timer::measure_duration_with_callback(
@@ -252,6 +259,7 @@ fn get_problem_blocks(
         transport.as_ref(),
         job_index,
         &environment,
+        skill_index.as_ref(),
     );
     let locks = locks.into_iter().chain(read_locks(api_problem, job_index)).collect::<Vec<_>>();
 

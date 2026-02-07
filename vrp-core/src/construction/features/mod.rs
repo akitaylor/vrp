@@ -48,7 +48,11 @@ mod reloads;
 pub use self::reloads::{ReloadFeatureFactory, ReloadIntervalsTourState, SharedResource, SharedResourceId};
 
 mod skills;
-pub use self::skills::{JobSkills, JobSkillsDimension, VehicleSkillsDimension, create_skills_feature};
+pub(crate) use self::skills::apply_skill_bitsets;
+pub use self::skills::{
+    JobSkills, JobSkillsBitset, JobSkillsBitsetDimension, JobSkillsDimension, VehicleSkillsBitset,
+    VehicleSkillsBitsetDimension, VehicleSkillsDimension, create_skills_feature,
+};
 
 mod total_value;
 pub use self::total_value::*;

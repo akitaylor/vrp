@@ -5,10 +5,11 @@ use crate::format::{JobIndex, Location};
 use crate::utils::VariableJobPermutation;
 use std::collections::HashMap;
 use std::sync::Arc;
+use super::skills_index::SkillIndex;
 use vrp_core::{
     construction::features::{
         BreakPolicy, JobCompatibilityDimension, JobDemandDimension, JobGroupDimension, JobSkills as FeatureJobSkills,
-        JobSkillsDimension,
+        JobSkillsBitsetDimension, JobSkillsDimension,
     },
     models::common::*,
     models::problem::{
@@ -31,11 +32,12 @@ pub(super) fn read_jobs_with_extra_locks(
     transport: &(dyn TransportCost + Sync + Send),
     job_index: &mut JobIndex,
     environment: &Environment,
+    skill_index: Option<&SkillIndex>,
 ) -> (Jobs, Vec<Arc<Lock>>) {
     let random = &environment.random;
     let logger = &environment.logger;
 
-    let (mut jobs, locks) = read_required_jobs(api_problem, props, coord_index, job_index, random);
+    let (mut jobs, locks) = read_required_jobs(api_problem, props, coord_index, job_index, random, skill_index);
     let conditional_jobs = read_conditional_jobs(api_problem, coord_index, job_index);
 
     jobs.extend(conditional_jobs);
@@ -111,6 +113,7 @@ fn read_required_jobs(
     coord_index: &CoordIndex,
     job_index: &mut JobIndex,
     random: &Arc<dyn Random>,
+    skill_index: Option<&SkillIndex>,
 ) -> (Vec<Job>, Vec<Arc<Lock>>) {
     let mut jobs = vec![];
     let has_multi_dimens = props.has_multi_dimen_capacity;
@@ -165,9 +168,9 @@ fn read_required_jobs(
 
         let problem_job = if singles.len() > 1 {
             let deliveries_start_index = job.pickups.as_ref().map_or(0, |p| p.len());
-            get_multi_job(job, singles, deliveries_start_index, random)
+            get_multi_job(job, singles, deliveries_start_index, random, skill_index)
         } else {
-            get_single_job(job, singles.into_iter().next().unwrap())
+            get_single_job(job, singles.into_iter().next().unwrap(), skill_index)
         };
 
         job_index.insert(job.id.clone(), problem_job.clone());
@@ -410,7 +413,7 @@ fn get_single_with_dimens(
     single
 }
 
-fn fill_dimens(job: &ApiJob, dimens: &mut Dimensions) {
+fn fill_dimens(job: &ApiJob, dimens: &mut Dimensions, skill_index: Option<&SkillIndex>) {
     dimens.set_job_id(job.id.clone());
 
     if let Some(value) = job.value {
@@ -427,19 +430,30 @@ fn fill_dimens(job: &ApiJob, dimens: &mut Dimensions) {
 
     if let Some(skills) = get_skills(&job.skills) {
         dimens.set_job_skills(skills);
+        if let Some(skill_index) = skill_index {
+            if let Some(bits) = skill_index.make_job_bitset(&job.skills) {
+                dimens.set_job_skills_bitset(bits);
+            }
+        }
     }
 }
 
-fn get_single_job(job: &ApiJob, single: Single) -> Job {
+fn get_single_job(job: &ApiJob, single: Single, skill_index: Option<&SkillIndex>) -> Job {
     let mut single = single;
-    fill_dimens(job, &mut single.dimens);
+    fill_dimens(job, &mut single.dimens, skill_index);
 
     Job::Single(Arc::new(single))
 }
 
-fn get_multi_job(job: &ApiJob, singles: Vec<Single>, deliveries_start_index: usize, random: &Arc<dyn Random>) -> Job {
+fn get_multi_job(
+    job: &ApiJob,
+    singles: Vec<Single>,
+    deliveries_start_index: usize,
+    random: &Arc<dyn Random>,
+    skill_index: Option<&SkillIndex>,
+) -> Job {
     let mut dimens: Dimensions = Default::default();
-    fill_dimens(job, &mut dimens);
+    fill_dimens(job, &mut dimens, skill_index);
 
     let singles = singles.into_iter().map(Arc::new).collect::<Vec<_>>();
 
