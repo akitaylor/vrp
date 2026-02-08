@@ -11,7 +11,11 @@ use crate::utils::get_approx_transportation;
 use std::collections::HashSet;
 use vrp_core::construction::enablers::create_typed_actor_groups;
 use vrp_core::construction::features::{
-    VehicleCapacityDimension, VehicleSkillsBitsetDimension, VehicleSkillsDimension,
+    Overtime,
+    VehicleCapacityDimension,
+    VehicleOvertimeDimension,
+    VehicleSkillsBitsetDimension,
+    VehicleSkillsDimension,
 };
 use vrp_core::models::common::*;
 use vrp_core::models::problem::*;
@@ -120,6 +124,11 @@ pub(super) fn read_fleet(
         let profile = Profile::new(index, vehicle.profile.scale);
 
         let tour_size = vehicle.limits.as_ref().and_then(|l| l.tour_size);
+        let overtime = vehicle
+            .limits
+            .as_ref()
+            .and_then(|l| l.overtime.as_ref())
+            .map(|overtime| Overtime { limit: overtime.limit, cost: overtime.cost });
 
         for (shift_index, shift) in vehicle.shifts.iter().enumerate() {
             let start = {
@@ -156,6 +165,10 @@ pub(super) fn read_fleet(
 
                 if let Some(tour_size) = tour_size {
                     dimens.set_tour_size(tour_size);
+                }
+
+                if let Some(overtime) = overtime {
+                    dimens.set_vehicle_overtime(overtime);
                 }
 
                 if props.has_multi_dimen_capacity {

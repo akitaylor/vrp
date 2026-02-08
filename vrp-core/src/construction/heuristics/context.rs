@@ -3,6 +3,7 @@
 mod context_test;
 
 use crate::construction::enablers::{TotalDistanceTourState, TotalDurationTourState};
+use crate::construction::features::VehicleOvertimeDimension;
 use crate::construction::heuristics::factories::*;
 use crate::models::GoalContext;
 use crate::models::common::Cost;
@@ -76,8 +77,16 @@ impl InsertionContext {
             let duration = route_ctx.state.get_total_duration();
 
             distance.zip(duration).map(|(&distance, &duration)| {
-                acc + get_cost(&actor.vehicle.costs, distance, duration)
-                    + get_cost(&actor.driver.costs, distance, duration)
+                let base = get_cost(&actor.vehicle.costs, distance, duration)
+                    + get_cost(&actor.driver.costs, distance, duration);
+                let overtime = actor
+                    .vehicle
+                    .dimens
+                    .get_vehicle_overtime()
+                    .map(|overtime| overtime.penalty(duration))
+                    .unwrap_or(0.);
+
+                acc + base + overtime
             })
         })
     }

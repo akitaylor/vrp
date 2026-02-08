@@ -426,7 +426,9 @@ impl CostObjective {
 
         let old_costs = tp_cost_old + act_cost_old + waiting_cost;
 
-        new_costs - old_costs
+        let overtime_delta = self.estimate_overtime_delta(route_ctx, activity_ctx);
+
+        new_costs - old_costs + overtime_delta
     }
 
     fn analyze_route_leg(
@@ -447,6 +449,20 @@ impl CostObjective {
         let activity_cost = self.activity.cost(route, end, arrival);
 
         (transport_cost, activity_cost, departure)
+    }
+
+    fn estimate_overtime_delta(&self, route_ctx: &RouteContext, activity_ctx: &ActivityContext) -> Cost {
+        let Some(overtime) = route_ctx.route().actor.vehicle.dimens.get_vehicle_overtime() else {
+            return 0.;
+        };
+
+        let current = route_ctx.state().get_total_duration().copied().unwrap_or(0.);
+        let (_, delta) = calculate_travel_delta(route_ctx, activity_ctx, self.transport.as_ref());
+
+        let before = overtime.penalty(current);
+        let after = overtime.penalty(current + delta);
+
+        after - before
     }
 }
 

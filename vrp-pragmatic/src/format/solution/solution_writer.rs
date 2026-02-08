@@ -7,7 +7,7 @@ use crate::format::solution::activity_matcher::get_job_tag;
 use crate::format::solution::model::Timing;
 use crate::format::solution::*;
 use vrp_core::construction::enablers::{ReservedTimesIndex, get_route_intervals};
-use vrp_core::construction::features::JobDemandDimension;
+use vrp_core::construction::features::{JobDemandDimension, VehicleOvertimeDimension};
 use vrp_core::construction::heuristics::UnassignmentInfo;
 use vrp_core::models::common::*;
 use vrp_core::models::problem::{JobIdDimension, Multi, TravelTime, VehicleIdDimension};
@@ -283,6 +283,9 @@ fn create_tour(
     });
 
     leg.statistic.cost += vehicle.costs.fixed;
+    if let Some(overtime) = vehicle.dimens.get_vehicle_overtime() {
+        leg.statistic.cost += overtime.penalty(leg.statistic.duration as Float);
+    }
     tour.statistic = leg.statistic;
 
     insert_reserved_times_as_breaks(route, &mut tour, reserved_times_index);

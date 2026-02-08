@@ -38,6 +38,9 @@ pub use self::locked_jobs::*;
 mod minimize_unassigned;
 pub use self::minimize_unassigned::*;
 
+mod overtime;
+pub use self::overtime::{Overtime, VehicleOvertimeDimension};
+
 mod reachable;
 pub use self::reachable::create_reachable_feature;
 

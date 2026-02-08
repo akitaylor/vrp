@@ -352,10 +352,24 @@ pub struct VehicleLimits {
     #[serde(alias = "shiftTime")]
     pub max_duration: Option<Float>,
 
+    /// Soft work time limit with overtime cost.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overtime: Option<VehicleOvertime>,
+
     /// Max amount job activities.
     /// No job activities restrictions when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tour_size: Option<usize>,
+}
+
+/// Vehicle overtime penalty settings.
+#[derive(Clone, Deserialize, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VehicleOvertime {
+    /// Work time limit in seconds.
+    pub limit: Float,
+    /// Overtime cost per time unit.
+    pub cost: Float,
 }
 
 /// Vehicle optional break time variant.
