@@ -11,6 +11,7 @@ extern crate serde_json;
 use serde::Deserialize;
 use std::io::{BufReader, Read};
 use std::sync::Arc;
+use crate::extensions::solve::interrupt::create_interruption_quota;
 use vrp_core::construction::heuristics::InsertionContext;
 use vrp_core::models::GoalContext;
 use vrp_core::models::common::Footprint;
@@ -881,19 +882,27 @@ fn configure_from_environment(
     environment_config: &Option<EnvironmentConfig>,
     max_time: Option<usize>,
 ) -> Arc<Environment> {
-    let mut environment = Environment::new_with_time_quota(max_time);
+    let logger: InfoLogger = match environment_config.as_ref().and_then(|c| c.logging.as_ref()) {
+        Some(logging) => match (logging.enabled, logging.prefix.clone()) {
+            (true, Some(prefix)) => Arc::new(move |msg: &str| println!("{prefix}{msg}")),
+            (true, None) => Arc::new(|msg: &str| println!("{msg}")),
+            _ => Arc::new(|_: &str| {}),
+        },
+        None => Arc::new(|msg: &str| println!("{msg}")),
+    };
+
+    let quota = Some(create_interruption_quota(max_time, logger.clone()));
+    let mut environment = Environment::new(
+        Arc::new(DefaultRandom::default()),
+        quota,
+        Parallelism::default(),
+        logger,
+        false,
+    );
 
     if let Some(parallelism) = environment_config.as_ref().and_then(|c| c.parallelism.as_ref()) {
         // TODO validate parameters
         environment.parallelism = Parallelism::new(parallelism.num_thread_pools, parallelism.threads_per_pool);
-    }
-
-    if let Some(logging) = environment_config.as_ref().and_then(|c| c.logging.as_ref()) {
-        environment.logger = match (logging.enabled, logging.prefix.clone()) {
-            (true, Some(prefix)) => Arc::new(move |msg: &str| println!("{prefix}{msg}")),
-            (true, None) => Arc::new(|msg: &str| println!("{msg}")),
-            _ => Arc::new(|_: &str| {}),
-        };
     }
 
     if let Some(is_experimental) = environment_config.as_ref().and_then(|c| c.is_experimental) {

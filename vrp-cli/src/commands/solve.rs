@@ -8,8 +8,8 @@ use clap::ArgAction;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use vrp_cli::core::solver::TargetHeuristic;
+use vrp_cli::extensions::solve::interrupt::create_interruption_quota;
 use vrp_cli::extensions::solve::config::create_builder_from_config_file;
 use vrp_cli::extensions::solve::formats::*;
 use vrp_core::construction::heuristics::InsertionContext;
@@ -369,7 +369,6 @@ fn get_init_size(matches: &ArgMatches) -> GenericResult<Option<usize>> {
 
 fn get_environment(matches: &ArgMatches) -> GenericResult<Arc<Environment>> {
     let max_time = parse_int_value::<usize>(matches, TIME_ARG_NAME, "max time")?;
-    let quota = Some(create_interruption_quota(max_time));
     let is_experimental = matches.get_one::<bool>(EXPERIMENTAL_ARG_NAME).copied().unwrap_or(false);
 
     matches
@@ -384,6 +383,7 @@ fn get_environment(matches: &ArgMatches) -> GenericResult<Arc<Environment>> {
                 } else {
                     Arc::new(|_: &str| {})
                 };
+                let quota = Some(create_interruption_quota(max_time, logger.clone()));
                 Ok(Arc::new(Environment::new(
                     Arc::new(DefaultRandom::default()),
                     quota.clone(),
@@ -395,7 +395,12 @@ fn get_environment(matches: &ArgMatches) -> GenericResult<Arc<Environment>> {
                 Err("cannot parse parallelism parameter".into())
             }
         })
-        .unwrap_or_else(|| Ok(Arc::new(Environment { quota, is_experimental, ..Environment::default() })))
+        .unwrap_or_else(|| {
+            let mut environment = Environment::default();
+            environment.quota = Some(create_interruption_quota(max_time, environment.logger.clone()));
+            environment.is_experimental = is_experimental;
+            Ok(Arc::new(environment))
+        })
 }
 
 fn get_matrix_files(matches: &ArgMatches) -> Option<Vec<File>> {
@@ -434,29 +439,3 @@ fn check_pragmatic_solution_with_args(matches: &ArgMatches) -> GenericResult<()>
     check_solution(matches, "pragmatic", PROBLEM_ARG_NAME, OUT_RESULT_ARG_NAME, MATRIX_ARG_NAME)
 }
 
-/// Creates interruption quota.
-pub fn create_interruption_quota(max_time: Option<usize>) -> Arc<dyn Quota> {
-    struct InterruptionQuota {
-        inner: Option<Arc<dyn Quota>>,
-        should_interrupt: Arc<AtomicBool>,
-    }
-
-    impl Quota for InterruptionQuota {
-        fn is_reached(&self) -> bool {
-            self.inner.as_ref().is_some_and(|inner| inner.is_reached()) || self.should_interrupt.load(Ordering::Relaxed)
-        }
-    }
-
-    let inner = max_time.map::<Arc<dyn Quota>, _>(|time| Arc::new(TimeQuota::new(time as Float)));
-    let should_interrupt = Arc::new(AtomicBool::new(false));
-
-    // NOTE ignore error which happens in unit tests
-    let _ = ctrlc::set_handler({
-        let should_interrupt = should_interrupt.clone();
-        move || {
-            should_interrupt.store(true, Ordering::Relaxed);
-        }
-    });
-
-    Arc::new(InterruptionQuota { inner, should_interrupt })
-}
