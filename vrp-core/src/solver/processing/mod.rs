@@ -14,3 +14,10 @@ pub use self::unassignment_reason::UnassignmentReason;
 
 mod vicinity_clustering;
 pub use self::vicinity_clustering::*;
+
+mod vehicle_allocation;
+pub use self::vehicle_allocation::{
+    VehicleAllocation,
+    VehicleAllocationSettings,
+    VehicleAllocationSettingsExtraProperty,
+};

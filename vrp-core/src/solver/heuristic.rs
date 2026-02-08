@@ -3,6 +3,7 @@ use crate::construction::heuristics::*;
 use crate::models::common::FootprintSolutionState;
 use crate::models::{Extras, GoalContext};
 use crate::rosomaxa::get_default_selection_size;
+use crate::solver::processing::VehicleAllocationSettingsExtraProperty;
 use crate::solver::search::*;
 use rosomaxa::algorithms::gsom::Input;
 use rosomaxa::hyper::*;
@@ -551,39 +552,48 @@ mod dynamic {
         problem: Arc<Problem>,
         environment: Arc<Environment>,
     ) -> Vec<(TargetSearchOperator, String, Float)> {
+        let settings = problem.extras.get_vehicle_allocation_settings();
+        let wrap = |op: TargetSearchOperator| {
+            if let Some(settings) = settings.as_ref() {
+                Arc::new(VehicleAllocationSearch::new(op, settings.clone())) as TargetSearchOperator
+            } else {
+                op
+            }
+        };
+
         vec![
             (
-                Arc::new(LocalSearch::new(Arc::new(ExchangeInterRouteBest::default()))),
+                wrap(Arc::new(LocalSearch::new(Arc::new(ExchangeInterRouteBest::default())))),
                 "local_exch_inter_route_best".to_string(),
                 1.,
             ),
             (
-                Arc::new(LocalSearch::new(Arc::new(ExchangeInterRouteRandom::default()))),
+                wrap(Arc::new(LocalSearch::new(Arc::new(ExchangeInterRouteRandom::default())))),
                 "local_exch_inter_route_random".to_string(),
                 1.,
             ),
             (
-                Arc::new(LocalSearch::new(Arc::new(ExchangeIntraRouteRandom::default()))),
+                wrap(Arc::new(LocalSearch::new(Arc::new(ExchangeIntraRouteRandom::default())))),
                 "local_exch_intra_route_random".to_string(),
                 1.,
             ),
             (
-                Arc::new(LocalSearch::new(Arc::new(RescheduleDeparture::default()))),
+                wrap(Arc::new(LocalSearch::new(Arc::new(RescheduleDeparture::default())))),
                 "local_reschedule_departure".to_string(),
                 1.,
             ),
-            (Arc::new(LKHSearch::new(LKHSearchMode::ImprovementOnly)), "lkh_strict".to_string(), 1.),
+            (wrap(Arc::new(LKHSearch::new(LKHSearchMode::ImprovementOnly))), "lkh_strict".to_string(), 1.),
             (
-                Arc::new(LocalSearch::new(Arc::new(ExchangeSwapStar::new(environment.random.clone())))),
+                wrap(Arc::new(LocalSearch::new(Arc::new(ExchangeSwapStar::new(environment.random.clone()))))),
                 "local_swap_star".to_string(),
                 2.,
             ),
             (
-                create_variable_search_decompose_search(problem.clone(), environment.clone()),
+                wrap(create_variable_search_decompose_search(problem.clone(), environment.clone())),
                 "variable_decompose_search".to_string(),
                 2.,
             ),
-            (create_composite_decompose_search(problem, environment), "composite_decompose_search".to_string(), 2.),
+            (wrap(create_composite_decompose_search(problem, environment)), "composite_decompose_search".to_string(), 2.),
         ]
     }
 
@@ -608,12 +618,21 @@ mod dynamic {
             })
             .collect::<Vec<_>>();
 
+        let settings = problem.extras.get_vehicle_allocation_settings();
+        let wrap = |op: TargetSearchOperator| {
+            if let Some(settings) = settings.as_ref() {
+                Arc::new(VehicleAllocationSearch::new(op, settings.clone())) as TargetSearchOperator
+            } else {
+                op
+            }
+        };
+
         let ruin_recreate_ops = recreates
             .iter()
             .flat_map(|(recreate, recreate_name, recreate_weight)| {
                 ruins.iter().map::<(TargetSearchOperator, String, Float), _>(move |(ruin, ruin_name, ruin_weight)| {
                     (
-                        Arc::new(RuinAndRecreate::new(ruin.clone(), recreate.clone())),
+                        wrap(Arc::new(RuinAndRecreate::new(ruin.clone(), recreate.clone()))),
                         format!("{ruin_name}+{recreate_name}"),
                         ruin_weight + recreate_weight,
                     )

@@ -43,6 +43,9 @@ pub use self::redistribute_search::RedistributeSearch;
 mod ruin_recreate;
 pub use self::ruin_recreate::RuinAndRecreate;
 
+mod vehicle_allocation;
+pub use self::vehicle_allocation::VehicleAllocationSearch;
+
 /// Provides the way to pick one heuristic operator from the group.
 pub struct WeightedHeuristicOperator {
     mutations: Vec<TargetSearchOperator>,

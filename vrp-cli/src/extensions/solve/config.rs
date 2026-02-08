@@ -22,6 +22,11 @@ use vrp_core::rosomaxa::utils::*;
 use vrp_core::solver::RecreateInitialOperator;
 use vrp_core::solver::search::*;
 use vrp_core::solver::*;
+use vrp_core::solver::processing::{
+    VehicleAllocation,
+    VehicleAllocationSettings,
+    VehicleAllocationSettingsExtraProperty,
+};
 
 /// An algorithm configuration.
 #[derive(Clone, Default, Deserialize, Debug)]
@@ -38,6 +43,9 @@ pub struct Config {
     pub telemetry: Option<TelemetryConfig>,
     /// Specifies output configuration.
     pub output: Option<OutputConfig>,
+    /// Specifies optional vehicle allocation post-processing.
+    #[serde(rename = "vehicleAllocation")]
+    pub vehicle_allocation: Option<VehicleAllocationConfig>,
 }
 
 /// An evolution configuration.
@@ -430,6 +438,39 @@ pub struct OutputConfig {
     pub include_geojson: Option<bool>,
 }
 
+const VEHICLE_ALLOCATION_DEFAULT_MAX_ITERATIONS: usize = 1;
+const VEHICLE_ALLOCATION_DEFAULT_ALLOW_UNUSED: bool = true;
+const VEHICLE_ALLOCATION_DEFAULT_ALLOW_SWAPS: bool = true;
+const VEHICLE_ALLOCATION_DEFAULT_LOG: bool = true;
+const VEHICLE_ALLOCATION_DEFAULT_APPLY_IN_SEARCH: bool = true;
+const VEHICLE_ALLOCATION_DEFAULT_SEARCH_INTERVAL: usize = 1000;
+const VEHICLE_ALLOCATION_DEFAULT_SEARCH_TOP_K: usize = 0;
+const VEHICLE_ALLOCATION_DEFAULT_SEARCH_SAMPLES: usize = 0;
+
+/// Specifies optional vehicle allocation post-processing.
+#[derive(Clone, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VehicleAllocationConfig {
+    /// Enables vehicle allocation.
+    pub enabled: Option<bool>,
+    /// Max iterations of improvement pass. Default is 1.
+    pub max_iterations: Option<usize>,
+    /// Allow reassigning routes to unused vehicles. Default is true.
+    pub allow_unused: Option<bool>,
+    /// Allow swapping vehicles between routes. Default is true.
+    pub allow_swaps: Option<bool>,
+    /// Enable logging for vehicle allocation. Default is false.
+    pub log: Option<bool>,
+    /// Apply vehicle allocation during search. Default is true.
+    pub apply_in_search: Option<bool>,
+    /// Interval in generations for search-time allocation. Default is 500.
+    pub search_interval: Option<usize>,
+    /// Apply allocation to top-k population solutions. Default is 0 (disabled).
+    pub search_top_k: Option<usize>,
+    /// Apply allocation to random population samples. Default is 0 (disabled).
+    pub search_samples: Option<usize>,
+}
+
 fn configure_from_evolution(
     mut builder: ProblemConfigBuilder,
     problem: Arc<Problem>,
@@ -523,6 +564,88 @@ fn configure_from_evolution(
     }
 
     Ok(builder)
+}
+
+fn configure_from_processing(
+    builder: ProblemConfigBuilder,
+    vehicle_allocation: &Option<VehicleAllocationConfig>,
+) -> ProblemConfigBuilder {
+    let Some(config) = vehicle_allocation else { return builder };
+    let enabled = config.enabled.unwrap_or(true);
+    if !enabled {
+        return builder;
+    }
+
+    let max_iterations = config.max_iterations.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_MAX_ITERATIONS);
+    let allow_unused = config.allow_unused.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_ALLOW_UNUSED);
+    let allow_swaps = config.allow_swaps.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_ALLOW_SWAPS);
+    let log = config.log.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_LOG);
+
+    let mut processing = create_default_processing();
+    processing.solution.push(Box::new(VehicleAllocation::new(
+        max_iterations,
+        allow_unused,
+        allow_swaps,
+        log,
+    )));
+
+    builder.with_processing(processing)
+}
+
+fn apply_vehicle_allocation_settings(
+    problem: &mut Arc<Problem>,
+    vehicle_allocation: &Option<VehicleAllocationConfig>,
+    logger: &InfoLogger,
+) {
+    let Some(config) = vehicle_allocation else {
+        (logger)("vehicle allocation: disabled (no config)");
+        return;
+    };
+
+    let enabled = config.enabled.unwrap_or(true);
+    let apply_in_search = config.apply_in_search.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_APPLY_IN_SEARCH);
+    let max_iterations = config.max_iterations.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_MAX_ITERATIONS);
+    let allow_unused = config.allow_unused.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_ALLOW_UNUSED);
+    let allow_swaps = config.allow_swaps.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_ALLOW_SWAPS);
+    let log = config.log.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_LOG);
+    let interval = config.search_interval.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_SEARCH_INTERVAL);
+    let search_top_k = config.search_top_k.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_SEARCH_TOP_K);
+    let search_samples = config.search_samples.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_SEARCH_SAMPLES);
+
+    (logger)(
+        format!(
+            "vehicle allocation: enabled={enabled}, apply_in_search={apply_in_search}, interval={interval}, search_top_k={search_top_k}, search_samples={search_samples}, max_iterations={max_iterations}, allow_unused={allow_unused}, allow_swaps={allow_swaps}, log={log}"
+        )
+        .as_str(),
+    );
+
+    if !enabled || !apply_in_search {
+        return;
+    }
+
+    let settings = VehicleAllocationSettings {
+        max_iterations,
+        allow_unused,
+        allow_swaps,
+        log,
+        interval,
+        search_top_k,
+        search_samples,
+    };
+
+    let problem_ref = problem.as_ref();
+    let mut extras = problem_ref.extras.as_ref().clone();
+    extras.set_vehicle_allocation_settings(Arc::new(settings));
+
+    *problem = Arc::new(Problem {
+        fleet: problem_ref.fleet.clone(),
+        jobs: problem_ref.jobs.clone(),
+        locks: problem_ref.locks.clone(),
+        goal: problem_ref.goal.clone(),
+        activity: problem_ref.activity.clone(),
+        transport: problem_ref.transport.clone(),
+        extras: Arc::new(extras),
+    });
 }
 
 fn configure_from_hyper(
@@ -799,19 +922,22 @@ where
 
 /// Creates a solver `Builder` from config.
 pub fn create_builder_from_config(
-    problem: Arc<Problem>,
+    mut problem: Arc<Problem>,
     solutions: Vec<InsertionContext>,
     config: &Config,
 ) -> GenericResult<ProblemConfigBuilder> {
     let environment =
         configure_from_environment(&config.environment, config.termination.as_ref().and_then(|t| t.max_time));
     let telemetry_mode = get_telemetry_mode(environment.clone(), &config.telemetry);
+
+    apply_vehicle_allocation_settings(&mut problem, &config.vehicle_allocation, &environment.logger);
     let mut builder = VrpConfigBuilder::new(problem.clone())
         .set_environment(environment.clone())
         .set_telemetry_mode(telemetry_mode.clone())
         .prebuild()?
         .with_init_solutions(solutions, None);
 
+    builder = configure_from_processing(builder, &config.vehicle_allocation);
     builder =
         configure_from_evolution(builder, problem.clone(), environment.clone(), telemetry_mode, &config.evolution)?;
     builder = configure_from_hyper(builder, problem, environment, &config.hyper)?;
