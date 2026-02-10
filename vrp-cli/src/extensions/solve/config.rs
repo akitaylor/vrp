@@ -86,6 +86,16 @@ pub enum PopulationType {
     Rosomaxa {
         /// Selection size. Default is number of cpus.
         selection_size: Option<usize>,
+        /// Specifies whether selection size can be adapted during search.
+        adaptive_selection: Option<bool>,
+        /// Enforces minimum selection size, if specified.
+        min_selection_size: Option<usize>,
+        /// Enforces minimum exploration generations, if specified.
+        min_exploration_generations: Option<usize>,
+        /// Enforces minimum exploration time in seconds, if specified.
+        min_exploration_time_secs: Option<usize>,
+        /// Enforces minimum exploration ratio, if specified.
+        min_exploration_ratio: Option<Float>,
         /// Elite population size. Default is 2.
         max_elite_size: Option<usize>,
         /// Node population size. Default is 4.
@@ -531,10 +541,30 @@ fn configure_from_evolution(
                     selection_size,
                     rebalance_memory,
                     exploration_ratio,
+                    adaptive_selection,
+                    min_selection_size,
+                    min_exploration_generations,
+                    min_exploration_time_secs,
+                    min_exploration_ratio,
                 } => {
                     let mut config = RosomaxaConfig::new_with_defaults(default_selection_size);
                     if let Some(selection_size) = selection_size {
                         config.selection_size = *selection_size;
+                    }
+                    if let Some(adaptive_selection) = adaptive_selection {
+                        config.adaptive_selection = *adaptive_selection;
+                    }
+                    if let Some(min_selection_size) = min_selection_size {
+                        config.min_selection_size = Some(*min_selection_size);
+                    }
+                    if let Some(min_exploration_generations) = min_exploration_generations {
+                        config.min_exploration_generations = Some(*min_exploration_generations);
+                    }
+                    if let Some(min_exploration_time_secs) = min_exploration_time_secs {
+                        config.min_exploration_time_secs = Some(*min_exploration_time_secs);
+                    }
+                    if let Some(min_exploration_ratio) = min_exploration_ratio {
+                        config.min_exploration_ratio = Some(*min_exploration_ratio);
                     }
                     if let Some(max_elite_size) = max_elite_size {
                         config.elite_size = *max_elite_size;
