@@ -7,7 +7,6 @@ mod static_selective;
 pub use self::static_selective::*;
 
 use crate::prelude::*;
-use crate::utils::parallel_into_collect;
 use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -122,13 +121,11 @@ where
 
     let solutions = solutions.into_iter().filter(|_| random.is_hit(probability)).collect::<Vec<_>>();
 
-    parallel_into_collect(solutions.iter().enumerate().collect(), |(solution_idx, solution)| {
-        heuristic_ctx
-            .environment()
-            .parallelism
-            .thread_pool_execute(solution_idx, || diversify_solution(heuristic_ctx, solution, operators))
-    })
-    .into_iter()
-    .flatten()
-    .collect()
+    heuristic_ctx
+        .environment()
+        .parallelism
+        .map_collect(solutions, |solution| diversify_solution(heuristic_ctx, solution, operators))
+        .into_iter()
+        .flatten()
+        .collect()
 }

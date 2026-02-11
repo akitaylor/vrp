@@ -1,6 +1,6 @@
 //! Contains environment specific logic.
 
-use crate::utils::{DefaultRandom, Float, Random, ThreadPool, Timer};
+use crate::utils::{DefaultRandom, Float, Random, ThreadPool, Timer, parallel_into_collect};
 use std::sync::Arc;
 
 /// A logger type which is called with various information.
@@ -130,6 +130,59 @@ impl Parallelism {
     /// Returns number of non-default thread pools. Returns zero if only default thread pool is used.
     pub fn thread_pool_size(&self) -> usize {
         self.thread_pools.as_ref().map_or(0, |tp| tp.len())
+    }
+
+    /// Maps items in parallel using configured thread pools, preserving input order.
+    pub fn map_collect<T, R, F>(&self, items: Vec<T>, map_op: F) -> Vec<R>
+    where
+        T: Send + Sync,
+        R: Send,
+        F: Fn(T) -> R + Sync + Send,
+    {
+        let Some(thread_pools) = self.thread_pools.as_ref() else {
+            return parallel_into_collect(items, map_op);
+        };
+
+        let pool_count = thread_pools.len();
+        if pool_count == 0 || items.len() <= 1 {
+            return parallel_into_collect(items, map_op);
+        }
+
+        if pool_count == 1 {
+            let pool = &thread_pools[0];
+            return pool.execute(|| parallel_into_collect(items, map_op));
+        }
+
+        let items_len = items.len();
+        let mut buckets: Vec<Vec<(usize, T)>> = (0..pool_count).map(|_| Vec::new()).collect();
+        for (idx, item) in items.into_iter().enumerate() {
+            buckets[idx % pool_count].push((idx, item));
+        }
+
+        let map_op = &map_op;
+        let mut results: Vec<Option<R>> = std::iter::repeat_with(|| None).take(items_len).collect();
+
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(pool_count);
+            for (pool_idx, bucket) in buckets.into_iter().enumerate() {
+                if bucket.is_empty() {
+                    continue;
+                }
+                let pool = &thread_pools[pool_idx];
+                handles.push(scope.spawn(move || {
+                    pool.execute(|| parallel_into_collect(bucket, |(idx, item)| (idx, map_op(item))))
+                }));
+            }
+
+            for handle in handles {
+                let chunk = handle.join().expect("parallel task panicked");
+                for (idx, value) in chunk {
+                    results[idx] = Some(value);
+                }
+            }
+        });
+
+        results.into_iter().map(|value| value.expect("missing parallel result")).collect()
     }
 }
 

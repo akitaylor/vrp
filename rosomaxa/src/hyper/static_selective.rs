@@ -1,5 +1,5 @@
 use super::*;
-use crate::utils::{UnwrapValue, parallel_into_collect};
+use crate::utils::UnwrapValue;
 use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::ops::ControlFlow;
@@ -44,11 +44,8 @@ where
     }
 
     fn search_many(&mut self, heuristic_ctx: &Self::Context, solutions: Vec<&Self::Solution>) -> Vec<Self::Solution> {
-        parallel_into_collect(solutions.iter().enumerate().collect(), |(idx, solution)| {
-            heuristic_ctx
-                .environment()
-                .parallelism
-                .thread_pool_execute(idx, || self.search_once(heuristic_ctx, solution))
+        heuristic_ctx.environment().parallelism.map_collect(solutions, |solution| {
+            self.search_once(heuristic_ctx, solution)
         })
     }
 
