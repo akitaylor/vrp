@@ -174,18 +174,30 @@ where
                     _ => (1, 1),
                 };
 
-                Box::new(
-                    self.elite
-                        .select()
-                        .take(elite_explore_size)
-                        .chain(
-                            coordinates
-                                .iter()
-                                .filter_map(move |coordinate| network.find(coordinate))
-                                .flat_map(move |node| node.storage.population.select().take(node_explore_size)),
-                        )
-                        .take(*selection_size),
-                )
+                let mut selected = self
+                    .elite
+                    .select()
+                    .take(elite_explore_size)
+                    .chain(
+                        coordinates
+                            .iter()
+                            .filter_map(move |coordinate| network.find(coordinate))
+                            .flat_map(move |node| node.storage.population.select().take(node_explore_size)),
+                    )
+                    .take(*selection_size)
+                    .collect::<Vec<_>>();
+
+                if selected.len() < *selection_size {
+                    let pool = self.iter().collect::<Vec<_>>();
+                    if !pool.is_empty() {
+                        while selected.len() < *selection_size {
+                            let idx = random.uniform_int(0, pool.len() as i32 - 1) as usize;
+                            selected.push(pool[idx]);
+                        }
+                    }
+                }
+
+                Box::new(selected.into_iter())
             }
             RosomaxaPhases::Exploitation { selection_size, .. } => Box::new(self.elite.select().take(*selection_size)),
         }
