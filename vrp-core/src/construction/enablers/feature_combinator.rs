@@ -123,7 +123,7 @@ impl FeatureState for CombinedFeatureState {
     fn accept_solution_state(&self, ctx: &mut SolutionContext) {
         // NOTE should not use a version with fallback to avoid hiding changes for other states
         let _ = self.states.iter().try_for_each(|state| {
-            let previous_state = (ctx.required.len(), ctx.ignored.len(), ctx.unassigned.len());
+            let previous_state = get_solution_state(ctx);
 
             state.accept_solution_state(ctx);
 
@@ -195,29 +195,20 @@ pub(crate) fn accept_route_state_with_states(states: &[Arc<dyn FeatureState>], r
 }
 
 pub(crate) fn accept_solution_state_with_states(states: &[Arc<dyn FeatureState>], solution_ctx: &mut SolutionContext) {
-    let _ = (0..).try_fold((usize::MAX, usize::MAX, usize::MAX), |(required, ignored, unassigned), counter| {
+    if states.is_empty() {
+        return;
+    }
+
+    let _ = (0..).try_for_each(|counter| {
         // NOTE if any job promotion occurs, then we might need to recalculate states.
-        // As it is hard to maintain dependencies between different modules, we reset process to
-        // beginning. However we do not expect recalculation to happen often, so this condition
-        // here is to prevent infinite loops and signalize about error in pipeline configuration
+        // Additionally, route state updates can mark routes as stale again, e.g. when a reload
+        // marker is removed from a route and all dependent states need to be recomputed.
         assert_ne!(counter, 100);
 
-        if has_changes(solution_ctx, (required, ignored, unassigned)) {
-            let required = solution_ctx.required.len();
-            let ignored = solution_ctx.ignored.len();
-            let unassigned = solution_ctx.unassigned.len();
+        let previous_state = get_solution_state(solution_ctx);
+        states.iter().for_each(|state| state.accept_solution_state(solution_ctx));
 
-            states
-                .iter()
-                .try_for_each(|state| {
-                    state.accept_solution_state(solution_ctx);
-                    if has_changes(solution_ctx, (required, ignored, unassigned)) { Err(()) } else { Ok(()) }
-                })
-                .map(|_| (required, ignored, unassigned))
-                .or(Ok((usize::MAX, usize::MAX, usize::MAX)))
-        } else {
-            Err(())
-        }
+        if has_changes(solution_ctx, previous_state) { Ok(()) } else { Err(()) }
     });
 
     solution_ctx.routes.iter_mut().for_each(|route_ctx| {
@@ -248,10 +239,20 @@ pub(crate) fn evaluate_with_constraints(
         .unwrap_value()
 }
 
-fn has_changes(solution_ctx: &SolutionContext, previous_state: (usize, usize, usize)) -> bool {
-    let (required, ignored, unassigned) = previous_state;
+fn has_changes(solution_ctx: &SolutionContext, previous_state: (usize, usize, usize, bool)) -> bool {
+    let (required, ignored, unassigned, has_stale_routes) = previous_state;
 
     required != solution_ctx.required.len()
         || ignored != solution_ctx.ignored.len()
         || unassigned != solution_ctx.unassigned.len()
+        || has_stale_routes != solution_ctx.routes.iter().any(|route_ctx| route_ctx.is_stale())
+}
+
+fn get_solution_state(solution_ctx: &SolutionContext) -> (usize, usize, usize, bool) {
+    (
+        solution_ctx.required.len(),
+        solution_ctx.ignored.len(),
+        solution_ctx.unassigned.len(),
+        solution_ctx.routes.iter().any(|route_ctx| route_ctx.is_stale()),
+    )
 }

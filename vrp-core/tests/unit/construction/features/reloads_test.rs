@@ -251,6 +251,39 @@ fn can_remove_trivial_reloads_when_used_from_capacity_constraint_impl(
     );
 }
 
+#[test]
+fn can_recalculate_reload_intervals_after_trivial_reload_removal() {
+    let threshold = 0.9;
+    let mut solution_ctx = TestInsertionContextBuilder::default()
+        .with_routes(vec![create_route_context(
+            vec![3],
+            vec![delivery("d1", (2, 0)), reload("r1"), delivery("d2", (1, 0))],
+        )])
+        .build()
+        .solution;
+    let reload_feature = create_simple_reload_feature::<MultiDimLoad, _>(move |capacity| *capacity * threshold);
+    let min_jobs_feature = MinimizeUnassignedBuilder::new("min_jobs").build().unwrap();
+    let goal = GoalContextBuilder::with_features(&[reload_feature, min_jobs_feature]).unwrap().build().unwrap();
+
+    goal.accept_route_state(solution_ctx.routes.get_mut(0).unwrap());
+    goal.accept_solution_state(&mut solution_ctx);
+
+    let route_ctx = solution_ctx.routes.first().unwrap();
+    let job_ids = route_ctx
+        .route()
+        .tour
+        .all_activities()
+        .filter_map(|activity| activity.job.as_ref())
+        .filter_map(|job| job.dimens.get_job_id())
+        .collect::<Vec<_>>();
+
+    assert_eq!(job_ids, vec!["d1", "d2"]);
+    assert_eq!(
+        route_ctx.state().get_reload_intervals().cloned(),
+        Some(vec![(0, route_ctx.route().tour.total() - 1)])
+    );
+}
+
 // shared reload
 
 fn create_usage_activity(demand: i32) -> Activity {
