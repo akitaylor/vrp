@@ -221,6 +221,10 @@ pub fn get_indices(extras: &CoreExtras) -> Result<(Arc<JobIndex>, Arc<CoordIndex
 /// Checks whether the given single job can be assigned to the given route taking into consideration
 /// its id and shift index.
 pub(crate) fn is_correct_vehicle(route: &Route, single: &Single) -> bool {
+    if let Some(job_vehicle_key) = single.dimens.get_vehicle_key().copied() {
+        return route.actor.vehicle.dimens.get_vehicle_key().is_some_and(|vehicle_key| *vehicle_key == job_vehicle_key);
+    }
+
     let job_vehicle_id = single.dimens.get_vehicle_id();
     let job_shift_idx = single.dimens.get_shift_index();
 

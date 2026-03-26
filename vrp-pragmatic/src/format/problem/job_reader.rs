@@ -345,12 +345,18 @@ fn get_conditional_job(
     places: Vec<PlaceData>,
 ) -> Single {
     let mut single = get_single(places, coord_index);
+    let vehicle_key = get_vehicle_key(vehicle_id.as_str(), shift_index);
     single
         .dimens
         .set_job_id(job_id.to_string())
         .set_job_type(job_type.to_string())
+        .set_vehicle_key(vehicle_key)
         .set_shift_index(shift_index)
         .set_vehicle_id(vehicle_id);
+
+    if let Some(job_kind) = get_conditional_job_kind(job_type) {
+        single.dimens.set_conditional_job_kind(job_kind);
+    }
 
     single
 }
@@ -477,9 +483,9 @@ fn get_multi_job(
 }
 
 fn create_condition(vehicle_id: String, shift_index: usize) -> Arc<dyn Fn(&Actor) -> bool + Sync + Send> {
+    let vehicle_key = get_vehicle_key(vehicle_id.as_str(), shift_index);
     Arc::new(move |actor: &Actor| {
-        *actor.vehicle.dimens.get_vehicle_id().unwrap() == vehicle_id
-            && actor.vehicle.dimens.get_shift_index().copied().unwrap() == shift_index
+        actor.vehicle.dimens.get_vehicle_key().is_some_and(|key| *key == vehicle_key)
     })
 }
 

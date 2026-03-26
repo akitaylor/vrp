@@ -443,7 +443,6 @@ impl CostObjective {
         let arrival = time
             + self.transport.duration(route, start.place.location, end.place.location, TravelTime::Departure(time));
         let departure = self.activity.estimate_departure(route, end, arrival).unwrap_value();
-
         let transport_cost =
             self.transport.cost(route, start.place.location, end.place.location, TravelTime::Departure(time));
         let activity_cost = self.activity.cost(route, end, arrival);

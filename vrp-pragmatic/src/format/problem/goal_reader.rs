@@ -363,7 +363,9 @@ fn get_fast_service_feature(name: &str, blocks: &ProblemBlocks) -> GenericResult
 
             demand_single.map(|d| d.get_type()).or_else(|| demand_multi.map(|d| d.get_type()))
         })
-        .set_is_filtered_job(|job| job.dimens().get_job_type().is_some_and(|job_type| job_type == "reload"))
+        .set_is_filtered_job(|job| job.as_single().is_some_and(|single| {
+            single.dimens.get_conditional_job_kind().is_some_and(|job_kind| *job_kind == JobKind::Reload)
+        }))
         .build()
 }
 
@@ -376,7 +378,7 @@ fn create_capacity_with_reload_feature<T: LoadOps + SharedResource + Mul<Float, 
     const RELOAD_THRESHOLD: Float = 0.9;
 
     fn is_reload_single(single: &Single) -> bool {
-        single.dimens.get_job_type().is_some_and(|job_type| job_type == "reload")
+        single.dimens.get_conditional_job_kind().is_some_and(|job_kind| *job_kind == JobKind::Reload)
     }
 
     let builder = ReloadFeatureFactory::new(name)
@@ -456,7 +458,7 @@ fn get_recharge_feature(
     transport: Arc<dyn TransportCost>,
 ) -> GenericResult<Feature> {
     fn is_recharge_single(single: &Single) -> bool {
-        single.dimens.get_job_type().is_some_and(|job_type| job_type == "recharge")
+        single.dimens.get_conditional_job_kind().is_some_and(|job_kind| *job_kind == JobKind::Recharge)
     }
 
     let distance_limit_index: HashMap<_, HashMap<_, _>> =
@@ -556,7 +558,7 @@ where
 
 fn create_optional_break_feature(name: &str) -> GenericResult<Feature> {
     fn is_break_job(single: &Single) -> bool {
-        single.dimens.get_job_type().is_some_and(|job_type| job_type == "break")
+        single.dimens.get_conditional_job_kind().is_some_and(|job_kind| *job_kind == JobKind::Break)
     }
 
     BreakFeatureBuilder::new(name)
@@ -573,11 +575,10 @@ fn create_optional_break_feature(name: &str) -> GenericResult<Feature> {
 fn get_tour_order_fn() -> TourOrderFn {
     TourOrderFn::Left(Arc::new(|single| {
         single.dimens.get_job_order().copied().map(|order| OrderResult::Value(order as Float)).unwrap_or_else(|| {
-            single.dimens.get_job_type().map_or(OrderResult::Default, |v| {
-                match v.as_str() {
-                    "break" | "reload" => OrderResult::Ignored,
-                    // job without value
-                    _ => OrderResult::Default,
+            single.dimens.get_conditional_job_kind().map_or(OrderResult::Default, |job_kind| {
+                match job_kind {
+                    JobKind::Break | JobKind::Reload => OrderResult::Ignored,
+                    JobKind::Recharge => OrderResult::Default,
                 }
             })
         })
