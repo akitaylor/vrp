@@ -63,6 +63,94 @@ can_check_breaks! {
     case20: (get_time_break(7., 10.), None, true, get_matched_break_error_msg(0, 1)),
 }
 
+#[test]
+fn can_match_break_once_when_it_is_between_two_activities_in_same_stop() {
+    let problem = Problem {
+        plan: Plan {
+            jobs: vec![create_delivery_job("job1", (1., 0.)), create_pickup_job("job2", (2., 0.)), create_pickup_job("job3", (2., 0.))],
+            ..create_empty_plan()
+        },
+        fleet: Fleet {
+            vehicles: vec![VehicleType {
+                shifts: vec![VehicleShift {
+                    start: ShiftStart { earliest: format_time(0.), latest: None, location: (0., 0.).to_loc() },
+                    end: Some(ShiftEnd { earliest: None, latest: format_time(1000.), location: (0., 0.).to_loc() }),
+                    breaks: Some(vec![VehicleBreak::Optional {
+                        time: get_time_break(9., 12.),
+                        places: vec![VehicleOptionalBreakPlace { duration: 2.0, location: None, tag: None }],
+                        policy: None,
+                    }]),
+                    reloads: None,
+                    recharges: None,
+                }],
+                capacity: vec![5],
+                ..create_default_vehicle_type()
+            }],
+            ..create_default_fleet()
+        },
+        ..create_empty_problem()
+    };
+
+    let solution = SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![1]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((1., 0.))
+                        .schedule_stamp(1., 2.)
+                        .load(vec![0])
+                        .distance(1)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::default()
+                        .coordinate((2., 0.))
+                        .schedule_stamp(9., 15.)
+                        .load(vec![2])
+                        .distance(2)
+                        .activities(vec![
+                            Activity {
+                                job_id: "job2".to_string(),
+                                activity_type: "pickup".to_string(),
+                                location: None,
+                                time: Some(Interval { start: format_time(9.), end: format_time(10.) }),
+                                job_tag: None,
+                                commute: None,
+                            },
+                            Activity {
+                                job_id: "break".to_string(),
+                                activity_type: "break".to_string(),
+                                location: None,
+                                time: Some(Interval { start: format_time(10.), end: format_time(12.) }),
+                                job_tag: None,
+                                commute: None,
+                            },
+                            Activity {
+                                job_id: "job3".to_string(),
+                                activity_type: "pickup".to_string(),
+                                location: None,
+                                time: Some(Interval { start: format_time(12.), end: format_time(15.) }),
+                                job_tag: None,
+                                commute: None,
+                            },
+                        ])
+                        .build(),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(17., 17.)
+                        .load(vec![2])
+                        .distance(4)
+                        .build_arrival(),
+                ])
+                .statistic(StatisticBuilder::default().driving(4).serving(9).break_time(2).build())
+                .build(),
+        )
+        .build();
+
+    let ctx = CheckerContext::new(create_example_problem(), problem, None, solution).unwrap();
+
+    assert_eq!(check_breaks(&ctx), Ok(()));
+}
+
 fn can_check_breaks_impl(
     break_times: VehicleOptionalBreakTime,
     violations: Option<Vec<Violation>>,

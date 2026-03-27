@@ -126,13 +126,6 @@ where
     phantom: PhantomData<T>,
 }
 
-struct CapacityStateRefs<'a, T: LoadOps> {
-    capacity: &'a T,
-    current: Option<&'a [T]>,
-    max_past: Option<&'a [T]>,
-    max_future: Option<&'a [T]>,
-}
-
 impl<T> MultiTrip for CapacitatedMultiTrip<T>
 where
     T: LoadOps,
@@ -219,13 +212,12 @@ where
     T: LoadOps,
 {
     fn evaluate_job(&self, route_ctx: &RouteContext, job: &Job) -> Option<ConstraintViolation> {
-        let state = get_capacity_state_refs(route_ctx);
         let can_handle = match job {
-            Job::Single(job) => self.can_handle_demand_on_intervals(route_ctx, state.as_ref(), job.dimens.get_job_demand(), None),
+            Job::Single(job) => self.can_handle_demand_on_intervals(route_ctx, job.dimens.get_job_demand(), None),
             Job::Multi(job) => job
                 .jobs
                 .iter()
-                .any(|job| self.can_handle_demand_on_intervals(route_ctx, state.as_ref(), job.dimens.get_job_demand(), None)),
+                .any(|job| self.can_handle_demand_on_intervals(route_ctx, job.dimens.get_job_demand(), None)),
         };
 
         if can_handle { ConstraintViolation::success() } else { ConstraintViolation::fail(self.violation_code) }
@@ -237,17 +229,16 @@ where
         activity_ctx: &ActivityContext,
     ) -> Option<ConstraintViolation> {
         let demand = self.get_demand(activity_ctx.target);
-        let state = get_capacity_state_refs(route_ctx);
 
         let violation = if activity_ctx.target.retrieve_job().is_some_and(|job| job.as_multi().is_some()) {
             // NOTE multi job has dynamic demand which can go in another interval
-            if self.can_handle_demand_on_intervals(route_ctx, state.as_ref(), demand, Some(activity_ctx.index)) {
+            if self.can_handle_demand_on_intervals(route_ctx, demand, Some(activity_ctx.index)) {
                 None
             } else {
                 Some(false)
             }
         } else {
-            has_demand_violation(state.as_ref(), activity_ctx.index, demand, !self.has_markers(route_ctx))
+            has_demand_violation(route_ctx, activity_ctx.index, demand, !self.has_markers(route_ctx))
         };
 
         violation.map(|stopped| ConstraintViolation { code: self.violation_code, stopped })
@@ -260,11 +251,10 @@ where
     fn can_handle_demand_on_intervals(
         &self,
         route_ctx: &RouteContext,
-        state: Option<&CapacityStateRefs<T>>,
         demand: Option<&Demand<T>>,
         insert_idx: Option<usize>,
     ) -> bool {
-        let has_demand_violation = |activity_idx: usize| has_demand_violation(state, activity_idx, demand, true);
+        let has_demand_violation = |activity_idx: usize| has_demand_violation(route_ctx, activity_idx, demand, true);
 
         let has_demand_violation_on_borders = |start_idx: usize, end_idx: usize| {
             has_demand_violation(start_idx).is_none() || has_demand_violation(end_idx).is_none()
@@ -297,39 +287,35 @@ where
     }
 }
 
-fn get_capacity_state_refs<T: LoadOps>(route_ctx: &RouteContext) -> Option<CapacityStateRefs<'_, T>> {
-    let state = route_ctx.state();
-    let capacity = route_ctx.route().actor.vehicle.dimens.get_vehicle_capacity::<T>()?;
-    let current = state.get_activity_states::<CurrentCapacityActivityStateKey, T>().map(Vec::as_slice);
-    let max_past = state.get_activity_states::<MaxPastCapacityActivityStateKey, T>().map(Vec::as_slice);
-    let max_future = state.get_activity_states::<MaxFutureCapacityActivityStateKey, T>().map(Vec::as_slice);
-
-    Some(CapacityStateRefs { capacity, current, max_past, max_future })
-}
-
 fn has_demand_violation<T: LoadOps>(
-    state: Option<&CapacityStateRefs<T>>,
+    route_ctx: &RouteContext,
     pivot_idx: usize,
     demand: Option<&Demand<T>>,
     stopped: bool,
 ) -> Option<bool> {
+    let capacity: Option<&T> = route_ctx.route().actor.vehicle.dimens.get_vehicle_capacity();
     let demand = demand?;
-    let state = if let Some(state) = state { state } else {
+
+    let capacity = if let Some(capacity) = capacity {
+        capacity
+    } else {
         return Some(stopped);
     };
 
+    let state = route_ctx.state();
+
     // check how static delivery affects a past max load
     if demand.delivery.0.is_not_empty() {
-        let past = state.max_past.and_then(|states| states.get(pivot_idx)).copied().unwrap_or_default();
-        if !state.capacity.can_fit(&(past + demand.delivery.0)) {
+        let past: T = state.get_max_past_capacity_at(pivot_idx).copied().unwrap_or_default();
+        if !capacity.can_fit(&(past + demand.delivery.0)) {
             return Some(stopped);
         }
     }
 
     // check how static pickup affect future max load
     if demand.pickup.0.is_not_empty() {
-        let future = state.max_future.and_then(|states| states.get(pivot_idx)).copied().unwrap_or_default();
-        if !state.capacity.can_fit(&(future + demand.pickup.0)) {
+        let future: T = state.get_max_future_capacity_at(pivot_idx).copied().unwrap_or_default();
+        if !capacity.can_fit(&(future + demand.pickup.0)) {
             return Some(false);
         }
     }
@@ -337,13 +323,13 @@ fn has_demand_violation<T: LoadOps>(
     // check dynamic load change
     let change = demand.change();
     if change.is_not_empty() {
-        let future = state.max_future.and_then(|states| states.get(pivot_idx)).copied().unwrap_or_default();
-        if !state.capacity.can_fit(&(future + change)) {
+        let future: T = state.get_max_future_capacity_at(pivot_idx).copied().unwrap_or_default();
+        if !capacity.can_fit(&(future + change)) {
             return Some(false);
         }
 
-        let current = state.current.and_then(|states| states.get(pivot_idx)).copied().unwrap_or_default();
-        if !state.capacity.can_fit(&(current + change)) {
+        let current: T = state.get_current_capacity_at(pivot_idx).copied().unwrap_or_default();
+        if !capacity.can_fit(&(current + change)) {
             return Some(false);
         }
     }

@@ -4,7 +4,6 @@ mod breaks_test;
 
 use super::*;
 use crate::utils::combine_error_results;
-use std::iter::once;
 use vrp_core::prelude::GenericResult;
 use vrp_core::utils::GenericError;
 
@@ -24,47 +23,46 @@ fn check_break_assignment(context: &CheckerContext) -> GenericResult<()> {
             .count();
         let matched_break_count = tour.stops.iter().try_fold(0, |acc, stop| {
             stop.activities()
-                .windows(stop.activities().len().min(2))
-                .flat_map(|leg| as_leg_info_with_break(context, tour, stop, leg))
-                .try_fold::<_, _, GenericResult<_>>(
-                    acc,
-                    |acc, (from_loc, (from, to), (break_activity, vehicle_break))| {
-                        // check time
-                        let visit_time = get_time_window(stop, break_activity);
-                        let break_time_window = get_break_time_window(tour, &vehicle_break)?;
-                        if !visit_time.intersects(&break_time_window) {
-                            return Err(format!(
-                                "break visit time '{visit_time:?}' is invalid: expected is in '{break_time_window:?}'",
-                            )
-                            .into());
-                        }
+                .iter()
+                .enumerate()
+                .flat_map(|(idx, _)| get_break_activity_info(context, tour, stop, idx))
+                .try_fold::<_, _, GenericResult<_>>(acc, |acc, (from_loc, (from, to), (break_activity, vehicle_break))| {
+                    // check time
+                    let visit_time = get_time_window(stop, break_activity);
+                    let break_time_window = get_break_time_window(tour, &vehicle_break)?;
+                    if !visit_time.intersects(&break_time_window) {
+                        return Err(format!(
+                            "break visit time '{visit_time:?}' is invalid: expected is in '{break_time_window:?}'",
+                        )
+                        .into());
+                    }
 
-                        // check location
-                        let actual_loc = context.get_activity_location(stop, to);
-                        let backward_loc = from
-                            .and_then(|activity| activity.commute.as_ref())
-                            .and_then(|commute| commute.backward.as_ref())
-                            .map(|info| &info.location)
-                            .cloned();
+                    // check location
+                    let actual_loc = context.get_activity_location(stop, to);
+                    let backward_loc = from
+                        .and_then(|activity| activity.commute.as_ref())
+                        .and_then(|commute| commute.backward.as_ref())
+                        .map(|info| &info.location)
+                        .cloned();
 
-                        let has_match = match vehicle_break {
-                            // TODO check tag and duration
-                            VehicleBreak::Optional { places, .. } => places.iter().any(|place| match &place.location {
-                                Some(location) => actual_loc.as_ref() == Some(location),
-                                None => from_loc == actual_loc || backward_loc == actual_loc,
-                            }),
-                            VehicleBreak::Required { .. } => actual_loc.is_none() || from_loc == actual_loc,
-                        };
+                    let has_match = match vehicle_break {
+                        // TODO check tag and duration
+                        VehicleBreak::Optional { places, .. } => places.iter().any(|place| match &place.location {
+                            Some(location) => actual_loc.as_ref() == Some(location),
+                            None => from_loc == actual_loc || backward_loc == actual_loc,
+                        }),
+                        VehicleBreak::Required { .. } => actual_loc.is_none() || from_loc == actual_loc,
+                    };
 
-                        if !has_match {
-                            return Err(format!(
-                                "break location '{actual_loc:?}' is invalid: cannot match to any break place'"
-                            )
-                            .into());
-                        }
-                        Ok(acc + 1)
-                    },
-                )
+                    if !has_match {
+                        return Err(format!(
+                            "break location '{actual_loc:?}' is invalid: cannot match to any break place'"
+                        )
+                        .into());
+                    }
+
+                    Ok(acc + 1)
+                })
         })?;
 
         if actual_break_count != matched_break_count {
@@ -129,35 +127,27 @@ fn check_break_assignment(context: &CheckerContext) -> GenericResult<()> {
 /// Represents information about break and neighbour activity.
 type LegBreakInfo<'a> = (Option<Location>, (Option<&'a Activity>, &'a Activity), (&'a Activity, VehicleBreak));
 
-fn as_leg_info_with_break<'a>(
+fn get_break_activity_info<'a>(
     context: &CheckerContext,
     tour: &Tour,
     stop: &'a Stop,
-    leg: &'a [Activity],
+    break_idx: usize,
 ) -> Option<LegBreakInfo<'a>> {
-    let leg = match leg {
-        [from, to] => Some((Some(from), to)),
-        [to] => Some((None, to)),
-        _ => None,
+    let activities = stop.activities();
+    let break_activity = activities.get(break_idx)?;
+    let vehicle_break = match context.get_activity_type(tour, stop, break_activity).ok()? {
+        ActivityType::Break(vehicle_break) => vehicle_break,
+        _ => return None,
     };
 
-    if let Some((from, to)) = leg
-        && let Some((break_activity, vehicle_break)) = once(to)
-            .chain(from.iter().cloned())
-            .flat_map(|activity| context.get_activity_type(tour, stop, activity).map(|at| (activity, at)))
-            .filter_map(|(activity, activity_type)| match activity_type {
-                ActivityType::Break(vehicle_break) => Some((activity, vehicle_break)),
-                _ => None,
-            })
-            .next()
-    {
-        let from_loc = leg.and_then(|(from, _)| from).and_then(|action| action.location.as_ref()).or(match stop {
-            Stop::Point(point) => Some(&point.location),
-            Stop::Transit(_) => None,
-        });
-        return Some((from_loc.cloned(), (from, to), (break_activity, vehicle_break)));
-    }
-    None
+    let from = break_idx.checked_sub(1).and_then(|idx| activities.get(idx));
+    let to = activities.get((break_idx + 1).min(activities.len().saturating_sub(1)))?;
+    let from_loc = from.and_then(|action| action.location.as_ref()).or(match stop {
+        Stop::Point(point) => Some(&point.location),
+        Stop::Transit(_) => None,
+    });
+
+    Some((from_loc.cloned(), (from, to), (break_activity, vehicle_break)))
 }
 
 /// Gets break time window.

@@ -157,11 +157,9 @@ pub(super) fn read_fleet(
 
             vehicle.vehicle_ids.iter().for_each(|vehicle_id| {
                 let mut dimens: Dimensions = Default::default();
-                let vehicle_key = get_vehicle_key(vehicle_id, shift_index);
 
                 dimens
                     .set_vehicle_type(vehicle.type_id.clone())
-                    .set_vehicle_key(vehicle_key)
                     .set_shift_index(shift_index)
                     .set_vehicle_id(vehicle_id.to_string());
 

@@ -97,7 +97,6 @@ macro_rules! custom_activity_state {
             #[doc = " Extends [RouteState] within a new ["[<$name ActivityState>]"]."]
             $vis trait [<$name ActivityState>] {
                 #[doc = " Gets `"$name "` activity state."]
-                #[allow(dead_code)]
                 fn [<get_ $name:snake:lower _at>]$(<$type : $gen>)?(&self, activity_idx: usize) -> Option<&$type>;
                 #[doc = " Sets `"$name "` activity states."]
                 fn [<set_ $name:snake:lower _states>]$(<$type : $gen>)?(&mut self, values: Vec<$type>);

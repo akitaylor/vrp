@@ -1,5 +1,9 @@
 //! This module provides some helper functionality to combine and use multiple features together.
 
+#[cfg(test)]
+#[path = "../../../tests/unit/construction/enablers/feature_combinator_test.rs"]
+mod feature_combinator_test;
+
 use crate::construction::heuristics::*;
 use crate::models::common::Cost;
 use crate::models::problem::Job;
@@ -239,20 +243,29 @@ pub(crate) fn evaluate_with_constraints(
         .unwrap_value()
 }
 
-fn has_changes(solution_ctx: &SolutionContext, previous_state: (usize, usize, usize, bool)) -> bool {
-    let (required, ignored, unassigned, has_stale_routes) = previous_state;
+fn has_changes(solution_ctx: &SolutionContext, previous_state: (usize, usize, usize, Vec<usize>)) -> bool {
+    let (required, ignored, unassigned, stale_routes) = previous_state;
 
     required != solution_ctx.required.len()
         || ignored != solution_ctx.ignored.len()
         || unassigned != solution_ctx.unassigned.len()
-        || has_stale_routes != solution_ctx.routes.iter().any(|route_ctx| route_ctx.is_stale())
+        || stale_routes != get_stale_routes(solution_ctx)
 }
 
-fn get_solution_state(solution_ctx: &SolutionContext) -> (usize, usize, usize, bool) {
+fn get_solution_state(solution_ctx: &SolutionContext) -> (usize, usize, usize, Vec<usize>) {
     (
         solution_ctx.required.len(),
         solution_ctx.ignored.len(),
         solution_ctx.unassigned.len(),
-        solution_ctx.routes.iter().any(|route_ctx| route_ctx.is_stale()),
+        get_stale_routes(solution_ctx),
     )
+}
+
+fn get_stale_routes(solution_ctx: &SolutionContext) -> Vec<usize> {
+    solution_ctx
+        .routes
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, route_ctx)| route_ctx.is_stale().then_some(idx))
+        .collect()
 }
