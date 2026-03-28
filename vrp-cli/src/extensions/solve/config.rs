@@ -407,6 +407,9 @@ pub struct EnvironmentConfig {
 
     /// Specifies experimental behavior flag.
     pub is_experimental: Option<bool>,
+
+    /// Uses repeatable RNG sequence for easier repro/debugging.
+    pub repeatable: Option<bool>,
 }
 
 /// Data parallelism configuration.
@@ -912,6 +915,7 @@ fn configure_from_environment(
     environment_config: &Option<EnvironmentConfig>,
     max_time: Option<usize>,
 ) -> Arc<Environment> {
+    let is_repeatable = environment_config.as_ref().and_then(|c| c.repeatable).unwrap_or_else(is_repeatable_from_env);
     let logger: InfoLogger = match environment_config.as_ref().and_then(|c| c.logging.as_ref()) {
         Some(logging) => match (logging.enabled, logging.prefix.clone()) {
             (true, Some(prefix)) => Arc::new(move |msg: &str| println!("{prefix}{msg}")),
@@ -923,7 +927,7 @@ fn configure_from_environment(
 
     let quota = Some(create_interruption_quota(max_time, logger.clone()));
     let mut environment = Environment::new(
-        Arc::new(DefaultRandom::default()),
+        create_random(is_repeatable),
         quota,
         Parallelism::default(),
         logger,
@@ -940,6 +944,17 @@ fn configure_from_environment(
     }
 
     Arc::new(environment)
+}
+
+fn create_random(is_repeatable: bool) -> Arc<dyn Random> {
+    if is_repeatable { Arc::new(DefaultRandom::new_repeatable()) } else { Arc::new(DefaultRandom::default()) }
+}
+
+fn is_repeatable_from_env() -> bool {
+    std::env::var("VRP_REPEATABLE_RNG")
+        .ok()
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 /// Reads config from reader.

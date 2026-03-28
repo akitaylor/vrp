@@ -56,6 +56,20 @@ where
             let generation_time = Timer::start();
 
             let parents = heuristic_ctx.selected().collect::<Vec<_>>();
+            let generation = heuristic_ctx.statistics().generation;
+            let should_log_parallel_sample = generation == 0 || generation.is_multiple_of(200);
+
+            if should_log_parallel_sample {
+                let thread_pools = heuristic_ctx.environment().parallelism.thread_pool_size();
+                (heuristic_ctx.environment().logger)(
+                    format!(
+                        "parallel sample: gen={generation}, phase={:?}, parents={}, thread_pools={thread_pools}",
+                        heuristic_ctx.selection_phase(),
+                        parents.len()
+                    )
+                    .as_str(),
+                );
+            }
 
             let diverse_offspring = if heuristic_ctx.selection_phase() == SelectionPhase::Exploitation {
                 Vec::default()

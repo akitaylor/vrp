@@ -243,7 +243,7 @@ pub(crate) fn evaluate_with_constraints(
         .unwrap_value()
 }
 
-fn has_changes(solution_ctx: &SolutionContext, previous_state: (usize, usize, usize, Vec<usize>)) -> bool {
+fn has_changes(solution_ctx: &SolutionContext, previous_state: (usize, usize, usize, Vec<(usize, usize, usize)>)) -> bool {
     let (required, ignored, unassigned, stale_routes) = previous_state;
 
     required != solution_ctx.required.len()
@@ -252,7 +252,7 @@ fn has_changes(solution_ctx: &SolutionContext, previous_state: (usize, usize, us
         || stale_routes != get_stale_routes(solution_ctx)
 }
 
-fn get_solution_state(solution_ctx: &SolutionContext) -> (usize, usize, usize, Vec<usize>) {
+fn get_solution_state(solution_ctx: &SolutionContext) -> (usize, usize, usize, Vec<(usize, usize, usize)>) {
     (
         solution_ctx.required.len(),
         solution_ctx.ignored.len(),
@@ -261,11 +261,15 @@ fn get_solution_state(solution_ctx: &SolutionContext) -> (usize, usize, usize, V
     )
 }
 
-fn get_stale_routes(solution_ctx: &SolutionContext) -> Vec<usize> {
+fn get_stale_routes(solution_ctx: &SolutionContext) -> Vec<(usize, usize, usize)> {
     solution_ctx
         .routes
         .iter()
         .enumerate()
-        .filter_map(|(idx, route_ctx)| route_ctx.is_stale().then_some(idx))
+        .filter_map(|(idx, route_ctx)| {
+            route_ctx
+                .is_stale()
+                .then_some((idx, route_ctx.route().tour.total(), route_ctx.route().tour.job_activity_count()))
+        })
         .collect()
 }

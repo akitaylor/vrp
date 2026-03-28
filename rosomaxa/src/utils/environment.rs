@@ -88,20 +88,28 @@ impl Quota for TimeQuota {
 #[derive(Clone)]
 pub struct Parallelism {
     available_cpus: usize,
-    thread_pools: Option<Arc<Vec<ThreadPool>>>,
+    thread_pool: Option<Arc<ThreadPool>>,
+    num_thread_pools: usize,
+    threads_per_pool: usize,
 }
 
 impl Default for Parallelism {
     fn default() -> Self {
-        Self { available_cpus: get_cpus(), thread_pools: None }
+        Self { available_cpus: get_cpus(), thread_pool: None, num_thread_pools: 0, threads_per_pool: 0 }
     }
 }
 
 impl Parallelism {
     /// Creates an instance of `Parallelism`.
     pub fn new(num_thread_pools: usize, threads_per_pool: usize) -> Self {
-        let thread_pools = (0..num_thread_pools).map(|_| ThreadPool::new(threads_per_pool)).collect();
-        Self { available_cpus: get_cpus(), thread_pools: Some(Arc::new(thread_pools)) }
+        let total_threads = num_thread_pools.saturating_mul(threads_per_pool).max(1);
+
+        Self {
+            available_cpus: get_cpus(),
+            thread_pool: Some(Arc::new(ThreadPool::new(total_threads))),
+            num_thread_pools,
+            threads_per_pool,
+        }
     }
 
     /// Creates an instance of `Parallelism` using available cpus as given.
@@ -121,7 +129,9 @@ impl Parallelism {
         OP: FnOnce() -> R + Send,
         R: Send,
     {
-        match self.thread_pools.as_ref().and_then(|tps| tps.get(idx % tps.len())) {
+        let _ = idx;
+
+        match self.thread_pool.as_ref() {
             Some(thread_pool) => thread_pool.execute(op),
             _ => op(),
         }
@@ -129,7 +139,12 @@ impl Parallelism {
 
     /// Returns number of non-default thread pools. Returns zero if only default thread pool is used.
     pub fn thread_pool_size(&self) -> usize {
-        self.thread_pools.as_ref().map_or(0, |tp| tp.len())
+        self.num_thread_pools
+    }
+
+    /// Returns configured number of worker threads per pool.
+    pub fn threads_per_pool(&self) -> usize {
+        self.threads_per_pool
     }
 
     /// Maps items in parallel using configured thread pools, preserving input order.
@@ -139,50 +154,15 @@ impl Parallelism {
         R: Send,
         F: Fn(T) -> R + Sync + Send,
     {
-        let Some(thread_pools) = self.thread_pools.as_ref() else {
+        let Some(thread_pool) = self.thread_pool.as_ref() else {
             return parallel_into_collect(items, map_op);
         };
 
-        let pool_count = thread_pools.len();
-        if pool_count == 0 || items.len() <= 1 {
+        if items.len() <= 1 {
             return parallel_into_collect(items, map_op);
         }
 
-        if pool_count == 1 {
-            let pool = &thread_pools[0];
-            return pool.execute(|| parallel_into_collect(items, map_op));
-        }
-
-        let items_len = items.len();
-        let mut buckets: Vec<Vec<(usize, T)>> = (0..pool_count).map(|_| Vec::new()).collect();
-        for (idx, item) in items.into_iter().enumerate() {
-            buckets[idx % pool_count].push((idx, item));
-        }
-
-        let map_op = &map_op;
-        let mut results: Vec<Option<R>> = std::iter::repeat_with(|| None).take(items_len).collect();
-
-        std::thread::scope(|scope| {
-            let mut handles = Vec::with_capacity(pool_count);
-            for (pool_idx, bucket) in buckets.into_iter().enumerate() {
-                if bucket.is_empty() {
-                    continue;
-                }
-                let pool = &thread_pools[pool_idx];
-                handles.push(scope.spawn(move || {
-                    pool.execute(|| parallel_into_collect(bucket, |(idx, item)| (idx, map_op(item))))
-                }));
-            }
-
-            for handle in handles {
-                let chunk = handle.join().expect("parallel task panicked");
-                for (idx, value) in chunk {
-                    results[idx] = Some(value);
-                }
-            }
-        });
-
-        results.into_iter().map(|value| value.expect("missing parallel result")).collect()
+        thread_pool.execute(|| parallel_into_collect(items, map_op))
     }
 }
 

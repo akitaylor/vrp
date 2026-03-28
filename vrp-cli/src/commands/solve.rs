@@ -370,6 +370,7 @@ fn get_init_size(matches: &ArgMatches) -> GenericResult<Option<usize>> {
 fn get_environment(matches: &ArgMatches) -> GenericResult<Arc<Environment>> {
     let max_time = parse_int_value::<usize>(matches, TIME_ARG_NAME, "max time")?;
     let is_experimental = matches.get_one::<bool>(EXPERIMENTAL_ARG_NAME).copied().unwrap_or(false);
+    let random = create_random(is_repeatable_from_env());
 
     matches
         .get_one::<String>(PARALLELISM_ARG_NAME)
@@ -385,7 +386,7 @@ fn get_environment(matches: &ArgMatches) -> GenericResult<Arc<Environment>> {
                 };
                 let quota = Some(create_interruption_quota(max_time, logger.clone()));
                 Ok(Arc::new(Environment::new(
-                    Arc::new(DefaultRandom::default()),
+                    random.clone(),
                     quota.clone(),
                     parallelism,
                     logger,
@@ -397,10 +398,22 @@ fn get_environment(matches: &ArgMatches) -> GenericResult<Arc<Environment>> {
         })
         .unwrap_or_else(|| {
             let mut environment = Environment::default();
+            environment.random = random;
             environment.quota = Some(create_interruption_quota(max_time, environment.logger.clone()));
             environment.is_experimental = is_experimental;
             Ok(Arc::new(environment))
         })
+}
+
+fn create_random(is_repeatable: bool) -> Arc<dyn Random> {
+    if is_repeatable { Arc::new(DefaultRandom::new_repeatable()) } else { Arc::new(DefaultRandom::default()) }
+}
+
+fn is_repeatable_from_env() -> bool {
+    std::env::var("VRP_REPEATABLE_RNG")
+        .ok()
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 fn get_matrix_files(matches: &ArgMatches) -> Option<Vec<File>> {

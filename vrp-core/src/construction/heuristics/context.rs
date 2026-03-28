@@ -217,7 +217,8 @@ impl From<InsertionContext> for Solution {
 
 impl From<(InsertionContext, Option<TelemetryMetrics>)> for Solution {
     fn from(value: (InsertionContext, Option<TelemetryMetrics>)) -> Self {
-        let (insertion_ctx, telemetry) = value;
+        let (mut insertion_ctx, telemetry) = value;
+        insertion_ctx.restore();
         let cost = insertion_ctx.get_total_cost().unwrap_or_default();
         let solution_ctx = insertion_ctx.solution;
 
