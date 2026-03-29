@@ -49,6 +49,38 @@ fn create_test_solution(statistic: Statistic, stop_data: &[(Float, i64); 3]) -> 
         .build()
 }
 
+fn create_test_solution_with_transit(statistic: Statistic) -> Solution {
+    SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![2]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((5., 0.))
+                        .schedule_stamp(5., 6.)
+                        .load(vec![1])
+                        .distance(5)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::new_transit().schedule_stamp(7., 9.).load(vec![1]).build_single("break", "break"),
+                    StopBuilder::default()
+                        .coordinate((10., 0.))
+                        .schedule_stamp(13., 14.)
+                        .load(vec![0])
+                        .distance(10)
+                        .build_single("job2", "delivery"),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(24., 24.)
+                        .load(vec![0])
+                        .distance(20)
+                        .build_arrival(),
+                ])
+                .statistic(statistic)
+                .build(),
+        )
+        .build()
+}
+
 fn duration_error(stop_idx: usize, actual: usize, expected: usize) -> GenericError {
     format!("arrival time mismatch for {stop_idx} stop in the tour: my_vehicle_1, expected: '1970-01-01T00:00:0{expected}Z', got: '1970-01-01T00:00:0{actual}Z'").into()
 }
@@ -140,4 +172,17 @@ fn can_check_solution_statistic() {
             .into()
         ])
     );
+}
+
+#[test]
+fn can_check_transit_break_inserted_during_travel() {
+    let problem = create_test_problem();
+    let matrix = create_matrix_from_problem(&problem);
+    let statistic = StatisticBuilder::default().driving(20).serving(2).break_time(2).build();
+    let solution = create_test_solution_with_transit(statistic);
+    let ctx = CheckerContext::new(create_example_problem(), problem, Some(vec![matrix]), solution).unwrap();
+
+    let result = check_routing(&ctx);
+
+    assert_eq!(result, Ok(()));
 }

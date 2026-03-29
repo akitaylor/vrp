@@ -606,7 +606,8 @@ fn configure_from_processing(
 ) -> ProblemConfigBuilder {
     let Some(config) = vehicle_allocation else { return builder };
     let enabled = config.enabled.unwrap_or(true);
-    if !enabled {
+    let apply_in_search = config.apply_in_search.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_APPLY_IN_SEARCH);
+    if !enabled || apply_in_search {
         return builder;
     }
 

@@ -40,29 +40,22 @@ fn check_routing_rules(context: &CheckerContext) -> GenericResult<()> {
 
         let (departure_time, total_distance) = tour.stops.windows(2).enumerate().try_fold::<_, _, GenericResult<_>>(
             (parse_time(&first_stop.schedule().departure) as i64, 0),
-            |(arrival_time, total_distance), (leg_idx, stops)| {
+            |(departure_time, total_distance), (leg_idx, stops)| {
                 let (from, to) = match stops {
                     [from, to] => (from, to),
                     _ => unreachable!(),
                 };
 
-                let (distance, duration, to_distance) = match (from, to) {
+                let (arrival_time, distance, to_distance) = match (from, to) {
                     (Stop::Point(from), Stop::Point(to)) => {
                         let (distance, duration) = get_matrix_data(from, to)?;
-                        (distance, duration, to.distance)
+                        (departure_time + duration, distance, to.distance)
                     }
-                    (prev, Stop::Transit(transit)) => {
-                        let prev_departure = parse_time(&prev.schedule().departure);
-                        let next_arrival = parse_time(&transit.time.arrival);
-                        // NOTE an edge case: duration of break will be counted in transit stop
-                        let duration = if next_arrival == prev_departure {
-                            0.
-                        } else {
-                            parse_time(&transit.time.departure) - next_arrival
-                        };
-                        (0_i64, duration as i64, total_distance)
+                    (Stop::Point(_), Stop::Transit(transit)) => {
+                        // A transit stop represents a break interval somewhere on the leg.
+                        (parse_time(&transit.time.arrival) as i64, 0_i64, total_distance)
                     }
-                    (Stop::Transit(_), Stop::Point(to)) => {
+                    (Stop::Transit(transit), Stop::Point(to)) => {
                         assert!(leg_idx > 0);
                         let from = tour
                             .stops
@@ -71,11 +64,26 @@ fn check_routing_rules(context: &CheckerContext) -> GenericResult<()> {
                             .as_point()
                             .expect("two consistent transit stops are not supported");
                         let (distance, duration) = get_matrix_data(from, to)?;
-                        (distance, duration, to.distance)
+                        let break_start = parse_time(&transit.time.arrival) as i64;
+                        let break_end = parse_time(&transit.time.departure) as i64;
+                        let traveled_before_break = break_start - parse_time(&from.time.departure) as i64;
+                        let remaining_duration = duration - traveled_before_break;
+
+                        if traveled_before_break < 0 || remaining_duration < 0 {
+                            return Err(format!(
+                                "invalid transit timing for tour '{}': break starts outside of travel leg",
+                                tour.vehicle_id
+                            )
+                            .into());
+                        }
+
+                        (break_end + remaining_duration, distance, to.distance)
+                    }
+                    (Stop::Transit(_), Stop::Transit(_)) => {
+                        return Err(format!("two consecutive transit stops are not supported in tour '{}'", tour.vehicle_id).into())
                     }
                 };
 
-                let arrival_time = arrival_time + duration;
                 let total_distance = total_distance + distance;
 
                 check_stop_statistic(

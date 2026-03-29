@@ -673,12 +673,18 @@ fn evaluate_exact_candidate(
     baseline_signature: &[(String, usize)],
     stats: &mut AllocationStats,
 ) -> Option<ExactAllocationCandidate> {
+    let baseline_pending_signature = collect_pending_job_signature(insertion_ctx);
     let mut candidate_ctx = try_apply_exact_swap(insertion_ctx, allocation)?;
     candidate_ctx.problem.goal.accept_solution_state(&mut candidate_ctx.solution);
     let baseline_cost = insertion_ctx.get_total_cost()?;
     let candidate_cost = candidate_ctx.get_total_cost()?;
 
     if collect_job_signature(&candidate_ctx) != baseline_signature {
+        stats.signature_rejected += 1;
+        return None;
+    }
+
+    if collect_pending_job_signature(&candidate_ctx) != baseline_pending_signature {
         stats.signature_rejected += 1;
         return None;
     }
@@ -1165,6 +1171,25 @@ fn collect_job_signature(insertion_ctx: &InsertionContext) -> Vec<(String, usize
         .routes
         .iter()
         .flat_map(|route_ctx| route_ctx.route().tour.jobs())
+        .filter(|job| !is_conditional_job(job))
+        .fold(HashMap::<String, usize>::new(), |mut acc, job| {
+            *acc.entry(get_job_id(job)).or_insert(0) += 1;
+            acc
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    counts.sort_by(|left, right| left.0.cmp(&right.0));
+    counts
+}
+
+fn collect_pending_job_signature(insertion_ctx: &InsertionContext) -> Vec<(String, usize)> {
+    let mut counts = insertion_ctx
+        .solution
+        .required
+        .iter()
+        .chain(insertion_ctx.solution.unassigned.keys())
+        .chain(insertion_ctx.solution.ignored.iter())
         .filter(|job| !is_conditional_job(job))
         .fold(HashMap::<String, usize>::new(), |mut acc, job| {
             *acc.entry(get_job_id(job)).or_insert(0) += 1;
