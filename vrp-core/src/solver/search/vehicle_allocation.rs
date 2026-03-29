@@ -1,9 +1,8 @@
 use crate::construction::heuristics::InsertionContext;
 use crate::models::GoalContext;
 use crate::solver::processing::{VehicleAllocation, VehicleAllocationSettings};
-use crate::solver::search::{Recreate, RecreateWithBlinks, RecreateWithCheapest, RecreateWithRegret, WeightedRecreate};
 use crate::solver::RefinementContext;
-use rosomaxa::{HeuristicContext, prelude::{HeuristicObjective, HeuristicSearchOperator, HeuristicSolution, Random}};
+use rosomaxa::{HeuristicContext, prelude::{HeuristicObjective, HeuristicSearchOperator, HeuristicSolution}};
 use std::cmp::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -62,16 +61,14 @@ impl HeuristicSearchOperator for VehicleAllocationSearch {
         let generation = heuristic_ctx.statistics().generation;
 
         if generation > 0 && generation % self.interval == 0 {
-            let recreate = create_vehicle_allocation_recreate(new_solution.environment.random.clone());
-
             if let Some(state) = self.state.as_ref() {
-                if let Some(best) = self.next_top_k_solution(heuristic_ctx, state, generation, recreate.as_ref()) {
+                if let Some(best) = self.next_top_k_solution(heuristic_ctx, state, generation) {
                     return best;
                 }
                 return new_solution;
             }
 
-            return self.allocation.apply_with_recreate(heuristic_ctx, new_solution, recreate.as_ref());
+            return self.allocation.apply(new_solution);
         }
 
         new_solution
@@ -90,13 +87,12 @@ impl VehicleAllocationSearch {
         heuristic_ctx: &RefinementContext,
         state: &Mutex<AllocationState>,
         generation: usize,
-        recreate: &dyn Recreate,
     ) -> Option<InsertionContext> {
         let mut guard = state.lock().expect("vehicle allocation state poisoned");
 
         if guard.generation != generation {
             guard.generation = generation;
-            guard.pending = self.collect_candidate_solutions(heuristic_ctx, recreate);
+            guard.pending = self.collect_candidate_solutions(heuristic_ctx);
 
             if self.log {
                 let produced = guard.pending.len();
@@ -113,7 +109,7 @@ impl VehicleAllocationSearch {
         guard.pending.pop()
     }
 
-    fn collect_candidate_solutions(&self, heuristic_ctx: &RefinementContext, recreate: &dyn Recreate) -> Vec<InsertionContext> {
+    fn collect_candidate_solutions(&self, heuristic_ctx: &RefinementContext) -> Vec<InsertionContext> {
         if self.top_k == 0 && self.samples == 0 {
             return Vec::new();
         }
@@ -157,7 +153,7 @@ impl VehicleAllocationSearch {
 
         for idx in selected_indices {
             let original = ranked[idx].deep_copy();
-            let updated = self.allocation.apply_with_recreate(heuristic_ctx, original.deep_copy(), recreate);
+            let updated = self.allocation.apply(original.deep_copy());
 
             if goal.total_order(&updated, &original) == Ordering::Less {
                 improved.push(updated);
@@ -166,12 +162,4 @@ impl VehicleAllocationSearch {
 
         improved
     }
-}
-
-fn create_vehicle_allocation_recreate(random: Arc<dyn Random>) -> Arc<dyn Recreate> {
-    Arc::new(WeightedRecreate::new(vec![
-        (Arc::new(RecreateWithCheapest::new(random.clone())), 4),
-        (Arc::new(RecreateWithRegret::new(1, 3, random.clone())), 2),
-        (Arc::new(RecreateWithBlinks::new_with_defaults(random)), 1),
-    ]))
 }

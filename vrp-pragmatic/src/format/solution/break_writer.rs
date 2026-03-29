@@ -23,36 +23,33 @@ pub(super) fn insert_reserved_times_as_breaks(
         .iter()
         .flat_map(|times| times.iter())
         .map(|reserved_time| reserved_time.to_reserved_time_window(shift_time.start))
-        .map(|rt| (TimeWindow::new(rt.time.end, rt.time.end + rt.duration), rt))
-        .filter(|(reserved_tw, _)| shift_time.intersects(reserved_tw))
-        .for_each(|(reserved_tw, reserved_time)| {
+        .filter_map(|reserved_time| resolve_reserved_time_window(route, reserved_time))
+        .for_each(|reserved_time| {
             // NOTE scan and insert a new stop if necessary
             let break_info = tour.stops.windows(2).enumerate().find_map(|(leg_idx, stops)| {
                 if let &[prev, next] = &stops {
                     let travel_tw =
                         TimeWindow::new(parse_time(&prev.schedule().departure), parse_time(&next.schedule().arrival));
 
-                    if travel_tw.intersects_exclusive(&reserved_tw) {
-                        // NOTE: should be moved to the last activity on previous stop by post-processing
-                        return if reserved_time.time.start < travel_tw.start {
-                            let break_tw = TimeWindow::new(travel_tw.start - reserved_tw.duration(), travel_tw.start);
-                            Some(BreakInsertion::TransitBreakMoved { leg_idx, break_tw })
-                        } else {
-                            Some(BreakInsertion::TransitBreakUsed { leg_idx, load: prev.load().clone() })
-                        };
+                    if let Some(reserved_tw) = get_reserved_time_window(&travel_tw, &reserved_time) {
+                        return Some(BreakInsertion::TransitBreakUsed {
+                            leg_idx,
+                            load: prev.load().clone(),
+                            break_tw: reserved_tw,
+                        });
                     }
                 }
 
                 None
             });
 
-            if let Some(BreakInsertion::TransitBreakUsed { leg_idx, load }) = break_info.clone() {
+            if let Some(BreakInsertion::TransitBreakUsed { leg_idx, load, break_tw }) = break_info.clone() {
                 tour.stops.insert(
                     leg_idx + 1,
                     Stop::Transit(TransitStop {
                         time: ApiSchedule {
-                            arrival: format_time(reserved_tw.start),
-                            departure: format_time(reserved_tw.end),
+                            arrival: format_time(break_tw.start),
+                            departure: format_time(break_tw.end),
                         },
                         load,
                         activities: vec![],
@@ -63,18 +60,19 @@ pub(super) fn insert_reserved_times_as_breaks(
             let break_time = reserved_time.duration as i64;
             let break_cost = break_time as Float * route.actor.vehicle.costs.per_service_time;
 
-            for (stop_idx, stop) in tour.stops.iter_mut().enumerate() {
-                let stop_tw =
-                    TimeWindow::new(parse_time(&stop.schedule().arrival), parse_time(&stop.schedule().departure));
+            if let Some((stop_idx, reserved_tw)) = tour.stops.iter().enumerate().find_map(|(stop_idx, stop)| {
+                let stop_tw = TimeWindow::new(parse_time(&stop.schedule().arrival), parse_time(&stop.schedule().departure));
+                get_reserved_time_window(&stop_tw, &reserved_time).map(|reserved_tw| (stop_idx, reserved_tw))
+            }) {
+                let stop = tour.stops.get_mut(stop_idx).expect("expected stop");
+                let stop_tw = TimeWindow::new(parse_time(&stop.schedule().arrival), parse_time(&stop.schedule().departure));
 
-                if stop_tw.intersects_exclusive(&reserved_tw) {
-                    insert_break(
-                        (stop, stop_tw, stop_idx),
-                        (break_time, break_cost, break_info.clone()),
-                        &reserved_tw,
-                        &mut tour.statistic,
-                    )
-                }
+                insert_break(
+                    (stop, stop_tw, stop_idx),
+                    (break_time, break_cost, break_info.clone()),
+                    &reserved_tw,
+                    &mut tour.statistic,
+                );
             }
 
             tour.statistic.times.break_time += break_time;
@@ -88,8 +86,8 @@ fn insert_break(
     reserved_tw: &TimeWindow,
     statistic: &mut Statistic,
 ) {
-    let (stop, stop_tw, stop_idx) = stop_data;
-    let (break_time, break_cost, break_insertion) = break_data;
+    let (stop, stop_tw, _) = stop_data;
+    let (break_time, break_cost, _) = break_data;
     let break_idx = stop
         .activities()
         .iter()
@@ -115,14 +113,7 @@ fn insert_break(
         }
     };
 
-    let activity_time = match &break_insertion {
-        Some(BreakInsertion::TransitBreakMoved { break_tw, leg_idx }) if *leg_idx == stop_idx => {
-            statistic.cost -= break_cost;
-            statistic.times.driving -= break_time;
-            break_tw
-        }
-        _ => reserved_tw,
-    };
+    let activity_time = reserved_tw;
 
     activities.insert(
         break_idx,
@@ -159,6 +150,43 @@ fn insert_break(
 
 #[derive(Clone)]
 enum BreakInsertion {
-    TransitBreakUsed { leg_idx: usize, load: Vec<i32> },
-    TransitBreakMoved { leg_idx: usize, break_tw: TimeWindow },
+    TransitBreakUsed { leg_idx: usize, load: Vec<i32>, break_tw: TimeWindow },
+}
+
+fn get_reserved_time_window(schedule: &TimeWindow, reserved_time: &vrp_core::construction::enablers::ReservedTimeWindow) -> Option<TimeWindow> {
+    let reserved_start = reserved_time.time.start;
+    let reserved_end = reserved_time.time.end;
+    let actual_start = schedule.start.clamp(reserved_start, reserved_end);
+    let actual_time = TimeWindow::new(actual_start, actual_start + reserved_time.duration);
+    let intersects = if schedule.start == schedule.end {
+        actual_time.contains(schedule.start)
+    } else {
+        actual_time.intersects_exclusive(schedule)
+    };
+
+    intersects.then_some(actual_time)
+}
+
+fn resolve_reserved_time_window(
+    route: &Route,
+    reserved_time: vrp_core::construction::enablers::ReservedTimeWindow,
+) -> Option<vrp_core::construction::enablers::ReservedTimeWindow> {
+    if reserved_time.time.start == reserved_time.time.end {
+        return Some(reserved_time);
+    }
+
+    let latest_start = route
+        .tour
+        .all_activities()
+        .map(|activity| TimeWindow::new(activity.schedule.arrival, activity.schedule.departure))
+        .chain(route.tour.legs().filter_map(|(leg, _)| match leg {
+            [from, to] => Some(TimeWindow::new(from.schedule.departure, to.schedule.arrival)),
+            _ => None,
+        }))
+        .filter(|schedule| schedule.end >= reserved_time.time.start && schedule.start <= reserved_time.time.end)
+        .map(|schedule| schedule.end.min(reserved_time.time.end))
+        .max_by(|left, right| left.total_cmp(right));
+
+    latest_start
+        .map(|start| vrp_core::construction::enablers::ReservedTimeWindow { time: TimeWindow::new(start, start), duration: reserved_time.duration })
 }

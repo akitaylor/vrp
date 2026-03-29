@@ -5,13 +5,24 @@ mod context_test;
 use crate::construction::enablers::{TotalDistanceTourState, TotalDurationTourState};
 use crate::construction::features::VehicleOvertimeDimension;
 use crate::construction::heuristics::factories::*;
+use crate::construction::heuristics::{
+    BestResultSelector,
+    EvaluationContext,
+    InsertionPosition,
+    InsertionResult,
+    LegSelection,
+    apply_insertion_success,
+    eval_job_insertion_in_route,
+};
 use crate::models::GoalContext;
 use crate::models::common::Cost;
 use crate::models::problem::*;
 use crate::models::solution::*;
 use crate::models::{Problem, Solution};
 use crate::prelude::ViolationCode;
-use rosomaxa::evolution::TelemetryMetrics;
+use crate::solver::search::{Recreate, RecreateWithBlinks, RecreateWithCheapest, RecreateWithRegret, WeightedRecreate};
+use crate::solver::{RefinementContext, create_elitism_population};
+use rosomaxa::evolution::{TelemetryMetrics, TelemetryMode};
 use rosomaxa::prelude::*;
 use rustc_hash::FxHasher;
 use std::any::{Any, TypeId};
@@ -94,8 +105,137 @@ impl InsertionContext {
     /// Restores valid context state.
     pub fn restore(&mut self) {
         self.problem.goal.accept_solution_state(&mut self.solution);
+        if remove_terminal_reload_markers(&mut self.solution) {
+            self.problem.goal.accept_solution_state(&mut self.solution);
+        }
         self.solution.remove_empty_routes();
     }
+}
+
+fn remove_terminal_reload_markers(solution_ctx: &mut SolutionContext) -> bool {
+    let mut removed_any = false;
+
+    solution_ctx.routes.iter_mut().for_each(|route_ctx| {
+        let Some(end_idx) = route_ctx.route().tour.end_idx() else { return };
+        if end_idx <= 1 {
+            return;
+        }
+
+        let should_remove = route_ctx
+            .route()
+            .tour
+            .get(end_idx - 1)
+            .and_then(|activity| activity.retrieve_job())
+            .is_some_and(|job| job.dimens().get_job_id().is_some_and(|job_id| job_id.contains("_reload_")));
+
+        if should_remove {
+            route_ctx.route_mut().tour.remove_activity_at(end_idx - 1);
+            removed_any = true;
+        }
+    });
+
+    removed_any
+}
+
+/// Restores solution state and tries to reinsert pending conditional jobs such as breaks or reloads.
+pub fn repair_conditional_jobs(insertion_ctx: &mut InsertionContext) {
+    insertion_ctx.restore();
+
+    let refinement_ctx = RefinementContext::new(
+        insertion_ctx.problem.clone(),
+        Box::new(create_elitism_population(insertion_ctx.problem.goal.clone(), insertion_ctx.environment.clone())),
+        TelemetryMode::None,
+        insertion_ctx.environment.clone(),
+    );
+    let recreate = WeightedRecreate::new(vec![
+        (Arc::new(RecreateWithCheapest::new(insertion_ctx.environment.random.clone())), 4),
+        (Arc::new(RecreateWithRegret::new(1, 3, insertion_ctx.environment.random.clone())), 2),
+        (Arc::new(RecreateWithBlinks::new_with_defaults(insertion_ctx.environment.random.clone())), 1),
+    ]);
+
+    let mut previous_pending = pending_conditional_job_count(insertion_ctx);
+    if previous_pending == 0 {
+        return;
+    }
+
+    for _ in 0..6 {
+        let mut repaired = recreate.run(&refinement_ctx, insertion_ctx.deep_copy());
+        repaired.restore();
+        try_insert_pending_conditional_jobs(&mut repaired);
+        repaired.restore();
+
+        let pending = pending_conditional_job_count(&repaired);
+        *insertion_ctx = repaired;
+
+        if pending == 0 || pending >= previous_pending {
+            break;
+        }
+
+        previous_pending = pending;
+    }
+}
+
+fn is_conditional_job(job: &Job) -> bool {
+    let Some(job_id) = job.dimens().get_job_id() else { return false };
+
+    job.dimens().get_vehicle_id().is_some()
+        && (job_id.contains("_break_") || job_id.contains("_reload_") || job_id.contains("_recharge_"))
+}
+
+fn pending_conditional_job_count(insertion_ctx: &InsertionContext) -> usize {
+    insertion_ctx.solution.required.iter().filter(|job| is_conditional_job(job)).count()
+        + insertion_ctx.solution.unassigned.keys().filter(|job| is_conditional_job(job)).count()
+        + insertion_ctx.solution.ignored.iter().filter(|job| is_conditional_job(job)).count()
+}
+
+fn try_insert_pending_conditional_jobs(insertion_ctx: &mut InsertionContext) {
+    let pending_jobs = insertion_ctx
+        .solution
+        .required
+        .iter()
+        .chain(insertion_ctx.solution.unassigned.keys())
+        .chain(insertion_ctx.solution.ignored.iter())
+        .filter(|job| is_conditional_job(job))
+        .cloned()
+        .collect::<Vec<_>>();
+    if pending_jobs.is_empty() {
+        return;
+    }
+
+    let goal = insertion_ctx.problem.goal.clone();
+    let leg_selection = LegSelection::Exhaustive;
+    let result_selector = BestResultSelector::default();
+
+    for job in pending_jobs {
+        let Some(route_idx) = find_conditional_route(insertion_ctx, &job) else { continue };
+        if let Some(route_ctx) = insertion_ctx.solution.routes.get_mut(route_idx) {
+            route_ctx.mark_stale(true);
+        }
+        let eval_ctx = EvaluationContext {
+            goal: goal.as_ref(),
+            job: &job,
+            leg_selection: &leg_selection,
+            result_selector: &result_selector,
+        };
+        let result = {
+            let route_ctx = &insertion_ctx.solution.routes[route_idx];
+            eval_job_insertion_in_route(insertion_ctx, &eval_ctx, route_ctx, InsertionPosition::Any, InsertionResult::make_failure())
+        };
+
+        if let InsertionResult::Success(success) = result {
+            insertion_ctx.solution.ignored.retain(|candidate| candidate != &job);
+            apply_insertion_success(insertion_ctx, success);
+            insertion_ctx.restore();
+        }
+    }
+}
+
+fn find_conditional_route(insertion_ctx: &InsertionContext, job: &Job) -> Option<usize> {
+    let vehicle_id = job.dimens().get_vehicle_id()?;
+
+    insertion_ctx.solution.routes.iter().position(|route_ctx| {
+        route_ctx.route().actor.vehicle.dimens.get_vehicle_id() == Some(vehicle_id)
+    })
 }
 
 impl HeuristicSolution for InsertionContext {
@@ -218,7 +358,7 @@ impl From<InsertionContext> for Solution {
 impl From<(InsertionContext, Option<TelemetryMetrics>)> for Solution {
     fn from(value: (InsertionContext, Option<TelemetryMetrics>)) -> Self {
         let (mut insertion_ctx, telemetry) = value;
-        insertion_ctx.restore();
+        repair_conditional_jobs(&mut insertion_ctx);
         let cost = insertion_ctx.get_total_cost().unwrap_or_default();
         let solution_ctx = insertion_ctx.solution;
 

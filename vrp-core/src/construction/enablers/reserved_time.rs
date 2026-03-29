@@ -44,10 +44,46 @@ pub type ReservedTimesIndex = HashMap<Arc<Actor>, Vec<ReservedTimeSpan>>;
 pub(crate) type ReservedTimesFn = Arc<dyn Fn(&Route, &TimeWindow) -> Option<ReservedTimeWindow> + Send + Sync>;
 
 struct ReservedTimesEntry {
-    indices: Vec<u64>,
     intervals: Vec<ReservedTimeSpan>,
     min_start: Timestamp,
     max_end: Timestamp,
+}
+
+fn get_reserved_time_window(
+    schedule: &TimeWindow,
+    reserved_time: &ReservedTimeWindow,
+) -> Option<TimeWindow> {
+    let reserved_start = reserved_time.time.start;
+    let reserved_end = reserved_time.time.end;
+    let actual_start = schedule.start.clamp(reserved_start, reserved_end);
+    let actual_time = TimeWindow::new(actual_start, actual_start + reserved_time.duration);
+    let intersects = if schedule.start == schedule.end {
+        actual_time.contains(schedule.start)
+    } else {
+        actual_time.intersects_exclusive(schedule)
+    };
+
+    intersects.then_some(actual_time)
+}
+
+fn resolve_reserved_time_window(route: &Route, reserved_time: ReservedTimeWindow) -> Option<ReservedTimeWindow> {
+    if reserved_time.time.start == reserved_time.time.end {
+        return Some(reserved_time);
+    }
+
+    let latest_start = route
+        .tour
+        .all_activities()
+        .map(|activity| TimeWindow::new(activity.schedule.arrival, activity.schedule.departure))
+        .chain(route.tour.legs().filter_map(|(leg, _)| match leg {
+            [from, to] => Some(TimeWindow::new(from.schedule.departure, to.schedule.arrival)),
+            _ => None,
+        }))
+        .filter(|schedule| schedule.end >= reserved_time.time.start && schedule.start <= reserved_time.time.end)
+        .map(|schedule| schedule.end.min(reserved_time.time.end))
+        .max_by(|left, right| left.total_cmp(right));
+
+    latest_start.map(|start| ReservedTimeWindow { time: TimeWindow::new(start, start), duration: reserved_time.duration })
 }
 
 /// Provides way to calculate activity costs which might contain reserved time.
@@ -74,11 +110,7 @@ impl ActivityCost for DynamicActivityCost {
         let schedule = TimeWindow::new(arrival, departure);
 
         (self.reserved_times_fn)(route, &schedule).map_or(ControlFlow::Continue(departure), |reserved_time| {
-            // NOTE we ignore reserved_time.time.start and consider the latest possible time only
-            let reserved_tw = &reserved_time.time;
-            let reserved_tw = TimeWindow::new(reserved_tw.end, reserved_tw.end + reserved_time.duration);
-
-            assert!(reserved_tw.intersects(&schedule));
+            let reserved_tw = get_reserved_time_window(&schedule, &reserved_time).expect("reserved time must intersect");
 
             let activity_tw = &activity.place.time;
 
@@ -111,8 +143,13 @@ impl ActivityCost for DynamicActivityCost {
         let arrival = activity.place.time.end.min(departure - activity.place.duration);
         let schedule = TimeWindow::new(arrival, departure);
 
-        let value = (self.reserved_times_fn)(route, &schedule)
-            .map_or(arrival, |reserved_time| (arrival - reserved_time.duration).max(activity.place.time.start));
+        let value = (self.reserved_times_fn)(route, &schedule).map_or(arrival, |reserved_time| {
+            if get_reserved_time_window(&schedule, &reserved_time).is_some() {
+                (arrival - reserved_time.duration).max(activity.place.time.start)
+            } else {
+                arrival
+            }
+        });
 
         ControlFlow::Continue(value)
     }
@@ -148,8 +185,9 @@ impl TransportCost for DynamicTransportCost {
             TravelTime::Departure(departure) => TimeWindow::new(departure, departure + duration),
         };
 
-        (self.reserved_times_fn)(route, &time_window)
-            .map_or(duration, |reserved_time| duration + reserved_time.duration)
+        (self.reserved_times_fn)(route, &time_window).map_or(duration, |reserved_time| {
+            duration + get_reserved_time_window(&time_window, &reserved_time).map_or(0., |_| reserved_time.duration)
+        })
     }
 
     fn distance(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Distance {
@@ -305,7 +343,9 @@ impl PrecomputedActorCostTransportCost {
             TravelTime::Departure(departure) => TimeWindow::new(departure, departure + base_duration),
         };
 
-        (self.reserved_times_fn)(route, &time_window).map_or(0., |reserved_time| reserved_time.duration)
+        (self.reserved_times_fn)(route, &time_window).map_or(0., |reserved_time| {
+            get_reserved_time_window(&time_window, &reserved_time).map_or(0., |_| reserved_time.duration)
+        })
     }
 }
 
@@ -435,29 +475,18 @@ pub(crate) fn create_reserved_times_fn(
             });
 
             if has_no_intersections {
-                let (indices, intervals): (Vec<_>, Vec<_>) = times
-                    .into_iter()
-                    .map(|span| {
-                        let start = match &span.time {
-                            TimeSpan::Window(time) => time.end,
-                            TimeSpan::Offset(time) => time.end,
-                        };
-
-                        (start as u64, span)
-                    })
-                    .unzip();
+                let intervals = times;
                 let (min_start, max_end) = intervals.iter().fold(
                     (Timestamp::MAX, Timestamp::MIN),
                     |(min_start, max_end), reserved_time| {
-                        let start = match &reserved_time.time {
-                            TimeSpan::Window(time) => time.end,
-                            TimeSpan::Offset(time) => time.end,
+                        let (start, end) = match &reserved_time.time {
+                            TimeSpan::Window(time) => (time.start, time.end),
+                            TimeSpan::Offset(time) => (time.start, time.end),
                         };
-                        let end = start + reserved_time.duration;
-                        (min_start.min(start), max_end.max(end))
+                        (min_start.min(start), max_end.max(end + reserved_time.duration))
                     },
                 );
-                acc.insert(actor, ReservedTimesEntry { indices, intervals, min_start, max_end });
+                acc.insert(actor, ReservedTimesEntry { intervals, min_start, max_end });
 
                 Ok(acc)
             } else {
@@ -466,8 +495,6 @@ pub(crate) fn create_reserved_times_fn(
         },
     )?;
 
-    // NOTE: this function considers only latest time from reserved time
-    //       reserved_time.time.start is ignored and should be handled by post processing
     Ok(Arc::new(move |route: &Route, time_window: &TimeWindow| {
         reserved_times.get(&route.actor).and_then(|entry| {
             let offset = route.tour.start().map(|a| a.schedule.departure).unwrap_or(0.);
@@ -482,24 +509,12 @@ pub(crate) fn create_reserved_times_fn(
                 return None;
             }
 
-            match entry.indices.binary_search(&(interval_start as u64)) {
-                Ok(idx) => entry.intervals.get(idx),
-                Err(idx) => (idx.max(1) - 1..=idx) // NOTE left (earliest) wins
-                    .map(|idx| entry.intervals.get(idx))
-                    .find(|reserved_time| {
-                        reserved_time.is_some_and(|reserved_time| {
-                            let (reserved_start, reserved_end) = match &reserved_time.time {
-                                TimeSpan::Offset(to) => (to.end, to.end + reserved_time.duration),
-                                TimeSpan::Window(tw) => (tw.end, tw.end + reserved_time.duration),
-                            };
+            entry.intervals.iter().find_map(|reserved_time| {
+                let reserved_time = reserved_time.to_reserved_time_window(offset);
+                let reserved_time = resolve_reserved_time_window(route, reserved_time)?;
 
-                            // NOTE use exclusive intersection
-                            interval_start < reserved_end && reserved_start < interval_end
-                        })
-                    })
-                    .flatten(),
-            }
-            .map(|reserved_time| reserved_time.to_reserved_time_window(offset))
+                get_reserved_time_window(time_window, &reserved_time).map(|_| reserved_time)
+            })
         })
     }))
 }

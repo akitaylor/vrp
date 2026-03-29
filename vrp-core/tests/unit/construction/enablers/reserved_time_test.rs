@@ -81,6 +81,33 @@ fn can_search_for_reserved_time_impl(
     }
 }
 
+#[test]
+fn can_search_for_offset_reserved_time_using_full_window() {
+    let route_ctx = RouteContextBuilder::default()
+        .with_route(
+            RouteBuilder::default()
+                .add_activity(ActivityBuilder::with_location_tw_and_duration(10, TimeWindow::new(0., 100.), 24.).build())
+                .build(),
+        )
+        .build();
+    let reserved_times = vec![(
+        route_ctx.route().actor.clone(),
+        vec![ReservedTimeSpan { time: TimeSpan::Offset(TimeOffset::new(10., 20.)), duration: 5. }],
+    )]
+    .into_iter()
+    .collect();
+
+    let reserved_time_fn = create_reserved_times_fn(reserved_times).unwrap();
+
+    let early = (reserved_time_fn)(route_ctx.route(), &TimeWindow::new(12., 14.));
+    let late = (reserved_time_fn)(route_ctx.route(), &TimeWindow::new(23., 24.));
+    let outside = (reserved_time_fn)(route_ctx.route(), &TimeWindow::new(26., 28.));
+
+    assert!(early.is_none());
+    assert_eq!(late.map(|rt| rt.time), Some(TimeWindow::new(20., 20.)));
+    assert!(outside.is_none());
+}
+
 fn create_feature_and_route(
     vehicle_detail_data: VehicleData,
     activities: Vec<ActivityData>,
@@ -261,6 +288,28 @@ fn can_evaluate_activity_impl(
     }
 }
 
+#[test]
+fn can_evaluate_activity_with_offset_reserved_time_window() {
+    let reserved_time = ReservedTimeSpan { time: TimeSpan::Offset(TimeOffset::new(10., 20.)), duration: 10. };
+    let (_, feature, mut route_ctx) = create_feature_and_route((0, 0, 0., 100.), vec![(20, (0., 100.), 10.)], reserved_time);
+    let (feature_constraint, feature_state) = (feature.constraint.unwrap(), feature.state.unwrap());
+    let prev = route_ctx.route().tour.get(0).unwrap();
+    let target = ActivityBuilder::with_location_tw_and_duration(10, TimeWindow::new(0., 100.), 10.).build();
+    let next = route_ctx.route().tour.get(1);
+    let solution_ctx = TestInsertionContextBuilder::default().build().solution;
+    let activity_ctx = ActivityContext { index: 0, prev, target: &target, next };
+
+    let is_violation =
+        feature_constraint.evaluate(&MoveContext::activity(&solution_ctx, &route_ctx, &activity_ctx)).is_some();
+
+    assert!(!is_violation);
+
+    route_ctx.route_mut().tour.insert_at(target, 1);
+    feature_state.accept_route_state(&mut route_ctx);
+
+    assert_eq!(get_schedules(&route_ctx), vec![(0., 0.), (10., 20.), (40., 50.), (70., 70.)]);
+}
+
 parameterized_test! {can_avoid_reserved_time_when_driving, (vehicle_detail_data, reserved_time, activities, expected_schedules), {
     can_avoid_reserved_time_when_driving_impl(vehicle_detail_data, reserved_time, activities, expected_schedules);
 }}
@@ -269,7 +318,7 @@ can_avoid_reserved_time_when_driving! {
     case01_should_move_duration_to_serving: (
         (0, 0, 0., 100.), (10., 40., 5.),
         vec![(10, (0., 100.), 10.), (50, (0., 100.), 10.)],
-        vec![(0., 0.), (10., 25.), (65., 75.), (125., 125.)]
+        vec![(0., 0.), (10., 20.), (65., 75.), (125., 125.)]
     ),
     case02_should_keep_duration_at_driving: (
         (0, 0, 0., 100.), (30., 40., 5.),

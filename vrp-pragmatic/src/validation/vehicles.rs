@@ -179,13 +179,9 @@ fn check_e1307_vehicle_offset_break_rescheduling(ctx: &ValidationContext) -> Res
                 .breaks
                 .as_ref()
                 .map(|breaks| {
-                    let has_time_offset = breaks.iter().any(|br| {
-                        matches!(
-                            br,
-                            VehicleBreak::Required { time: VehicleRequiredBreakTime::OffsetTime { .. }, .. }
-                                | VehicleBreak::Optional { time: VehicleOptionalBreakTime::TimeOffset { .. }, .. }
-                        )
-                    });
+                    let has_time_offset = breaks
+                        .iter()
+                        .any(|br| matches!(br, VehicleBreak::Optional { time: VehicleOptionalBreakTime::TimeOffset(_), .. }));
                     let has_rescheduling =
                         shift.start.latest.as_ref().is_none_or(|latest| *latest != shift.start.earliest);
 
@@ -200,9 +196,9 @@ fn check_e1307_vehicle_offset_break_rescheduling(ctx: &ValidationContext) -> Res
     } else {
         Err(FormatError::new(
             "E1307".to_string(),
-            "time offset interval for break is used with departure rescheduling".to_string(),
+            "time offset interval for optional break is used with departure rescheduling".to_string(),
             format!(
-                "when time offset is used, start.latest should be set equal to start.earliest in the shift, check vehicle type ids: '{}'",
+                "when optional time offset is used, start.latest should be set equal to start.earliest in the shift, check vehicle type ids: '{}'",
                 type_ids.join(", ")
             ),
         ))

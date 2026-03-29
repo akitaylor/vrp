@@ -4,7 +4,7 @@ use crate::format::solution::*;
 use crate::helpers::*;
 use std::sync::Arc;
 use vrp_core::construction::enablers::ReservedTimeSpan;
-use vrp_core::models::common::{TimeSpan, TimeWindow};
+use vrp_core::models::common::{TimeOffset, TimeSpan, TimeWindow};
 use vrp_core::models::examples::create_example_problem;
 
 type DomainProblem = vrp_core::models::Problem;
@@ -207,4 +207,34 @@ fn can_merge_required_break_on_stop_arrival_time_properly() {
 
     assert_eq!(tour.stops.len(), 3);
     assert_eq!(get_ids_from_tour(&tour).into_iter().flatten().filter(|id| id == "break").count(), 1);
+}
+
+#[test]
+fn can_write_offset_required_break_without_collapsing_to_latest() {
+    let (problem, mut coord_index) = create_test_problem_and_coord_index();
+    coord_index.add(&Location::Reference { index: 1 });
+    let activities = vec![DomainActivity {
+        schedule: DomainSchedule { arrival: 4., departure: 7. },
+        ..create_activity_with_job_at_location(create_single(&format!("job{}", 1)), 1)
+    }];
+    let route = create_route_with_activities(&problem.fleet, "v1", activities);
+    let reserved_times_index = vec![(
+        route.actor.clone(),
+        vec![ReservedTimeSpan { time: TimeSpan::Offset(TimeOffset::new(4., 6.)), duration: 1. }],
+    )]
+    .into_iter()
+    .collect();
+
+    let tour = create_tour(&problem, &route, &coord_index, &reserved_times_index);
+    let break_activity = tour
+        .stops
+        .iter()
+        .flat_map(|stop| stop.activities())
+        .find(|activity| activity.activity_type == "break")
+        .expect("expected break");
+
+    let time = break_activity.time.as_ref().expect("expected break time");
+
+    assert_eq!(time.start, "1970-01-01T00:00:06Z");
+    assert_eq!(time.end, "1970-01-01T00:00:07Z");
 }
