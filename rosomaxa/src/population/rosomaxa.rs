@@ -12,7 +12,6 @@ use std::f64::consts::{E, PI};
 use std::fmt::Formatter;
 use std::ops::RangeBounds;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 /// Specifies rosomaxa configuration settings.
 pub struct RosomaxaConfig {
@@ -101,8 +100,6 @@ where
     config: RosomaxaConfig,
     elite: Elitism<O, S>,
     phase: RosomaxaPhases<C, O, S>,
-    log_state: Option<ParallelismLogState>,
-    log_id: usize,
 }
 
 impl<C, O, S> HeuristicPopulation for Rosomaxa<C, O, S>
@@ -272,8 +269,6 @@ where
             ),
             phase: RosomaxaPhases::Initial { solutions: vec![] },
             config,
-            log_state: None,
-            log_id: ROSOMAXA_ID.fetch_add(1, AtomicOrdering::Relaxed),
         })
     }
 
@@ -378,91 +373,7 @@ where
     }
 
     fn log_parallelism(&mut self, statistics: &HeuristicStatistics, exploration_ratio: Float) {
-        let phase = self.current_phase_tag();
-        let selection_size = self.current_selection_size();
-        let generation = statistics.generation;
-
-        if matches!(phase, PhaseTag::Initial) && selection_size.is_none() {
-            return;
-        }
-
-        const LOG_INTERVAL: usize = 200;
-
-        let should_log = match &self.log_state {
-            Some(state) => {
-                state.phase != phase
-                    || state.selection_size != selection_size
-                    || generation.saturating_sub(state.last_generation) >= LOG_INTERVAL
-            }
-            None => true,
-        };
-        if !should_log {
-            return;
-        }
-
-        let (speed_label, speed_ratio, speed_average, speed_median) = match &statistics.speed {
-            HeuristicSpeed::Unknown => ("unknown", None, None, None),
-            HeuristicSpeed::Moderate { average, median } => ("moderate", None, Some(*average), *median),
-            HeuristicSpeed::Slow { ratio, average, median } => ("slow", Some(*ratio), Some(*average), *median),
-        };
-
-        let selection_size_str = selection_size.map_or("n/a".to_string(), |value| value.to_string());
-        let ratio_str = speed_ratio.map_or("n/a".to_string(), |value| format!("{value:.2}"));
-        let avg_str = speed_average.map_or("n/a".to_string(), |value| format!("{value:.2}"));
-        let median_str = speed_median.map_or("n/a".to_string(), |value| value.to_string());
-        let thread_id = format!("{:?}", std::thread::current().id());
-        let pid = std::process::id();
-        let min_selection_str =
-            self.config.min_selection_size.map_or("n/a".to_string(), |value| value.to_string());
-        let min_exploration_gen_str = self
-            .config
-            .min_exploration_generations
-            .map_or("n/a".to_string(), |value| value.to_string());
-        let min_exploration_time_str = self
-            .config
-            .min_exploration_time_secs
-            .map_or("n/a".to_string(), |value| value.to_string());
-        let min_exploration_ratio_str = self
-            .config
-            .min_exploration_ratio
-            .map_or("n/a".to_string(), |value| format!("{value:.3}"));
-
-        (self.environment.logger)(
-            format!(
-                "rosomaxa parallelism: id={}, pid={}, tid={}, gen={}, phase={}, selection_size={selection_size_str}, speed={speed_label}, ratio={ratio_str}, avg={avg_str}, median_ms={median_str}, termination={:.3}, exploration_ratio={exploration_ratio:.3}, configured_selection={}, adaptive={}, min_selection={}, min_explore_gen={}, min_explore_sec={}, min_explore_ratio={}",
-                self.log_id,
-                pid,
-                thread_id,
-                generation,
-                phase.as_str(),
-                statistics.termination_estimate,
-                self.config.selection_size,
-                self.config.adaptive_selection,
-                min_selection_str,
-                min_exploration_gen_str,
-                min_exploration_time_str,
-                min_exploration_ratio_str,
-            )
-            .as_str(),
-        );
-
-        self.log_state = Some(ParallelismLogState { phase, selection_size, last_generation: generation });
-    }
-
-    fn current_selection_size(&self) -> Option<usize> {
-        match &self.phase {
-            RosomaxaPhases::Initial { .. } => None,
-            RosomaxaPhases::Exploration { selection_size, .. } => Some(*selection_size),
-            RosomaxaPhases::Exploitation { selection_size } => Some(*selection_size),
-        }
-    }
-
-    fn current_phase_tag(&self) -> PhaseTag {
-        match &self.phase {
-            RosomaxaPhases::Initial { .. } => PhaseTag::Initial,
-            RosomaxaPhases::Exploration { .. } => PhaseTag::Exploration,
-            RosomaxaPhases::Exploitation { .. } => PhaseTag::Exploitation,
-        }
+        let _ = (statistics, exploration_ratio);
     }
 
     fn is_comparable_with_best_known(&self, individual: &S, best_known: Option<&S>) -> bool {
@@ -575,32 +486,6 @@ where
         selection_size: usize,
     },
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ParallelismLogState {
-    phase: PhaseTag,
-    selection_size: Option<usize>,
-    last_generation: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PhaseTag {
-    Initial,
-    Exploration,
-    Exploitation,
-}
-
-impl PhaseTag {
-    fn as_str(&self) -> &'static str {
-        match self {
-            PhaseTag::Initial => "initial",
-            PhaseTag::Exploration => "exploration",
-            PhaseTag::Exploitation => "exploitation",
-        }
-    }
-}
-
-static ROSOMAXA_ID: AtomicUsize = AtomicUsize::new(1);
 
 fn init_individual<C, S>(external_ctx: &C, individual: S) -> S
 where

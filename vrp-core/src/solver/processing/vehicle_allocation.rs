@@ -202,19 +202,32 @@ impl VehicleAllocation {
             };
 
             if self.log {
-                (insertion_ctx.environment.logger)(
-                    format!(
-                        "vehicle allocation candidate: move={}, estimated_improvement={:.3}, cost_after={}, fitness_after={}, routes_after={}, unassigned_after={}, ignored_after={}",
-                        format_repair_move(&candidate.allocation),
-                        candidate.allocation.improvement(),
-                        format_cost(candidate.cost),
-                        format_fitness(&candidate.fitness),
-                        candidate.insertion_ctx.solution.routes.len(),
-                        candidate.insertion_ctx.solution.unassigned.len(),
-                        candidate.insertion_ctx.solution.ignored.len()
-                    )
-                    .as_str(),
-                );
+                match &candidate.allocation {
+                    RepairAllocationMove::Swap { left_actor, right_actor, .. } => {
+                        (insertion_ctx.environment.logger)(
+                            format!(
+                                "vehicle swap applied: left={}, right={}, improvement={:.3}, cost_after={}",
+                                get_actor_id(left_actor),
+                                get_actor_id(right_actor),
+                                candidate.allocation.improvement(),
+                                format_cost(candidate.cost)
+                            )
+                            .as_str(),
+                        );
+                    }
+                    RepairAllocationMove::Reassign { source_actor, candidate_actor, .. } => {
+                        (insertion_ctx.environment.logger)(
+                            format!(
+                                "vehicle reassign applied: source={}, target={}, improvement={:.3}, cost_after={}",
+                                get_actor_id(source_actor),
+                                get_actor_id(candidate_actor),
+                                candidate.allocation.improvement(),
+                                format_cost(candidate.cost)
+                            )
+                            .as_str(),
+                        );
+                    }
+                }
             }
 
             insertion_ctx = candidate.insertion_ctx;
@@ -257,7 +270,6 @@ struct ExactAllocationCandidate {
     allocation: RepairAllocationMove,
     insertion_ctx: InsertionContext,
     cost: Option<Cost>,
-    fitness: Vec<Float>,
 }
 
 struct DebugLogState {
@@ -399,23 +411,6 @@ impl RepairAllocationMove {
         match self {
             Self::Reassign { improvement, .. } => *improvement,
             Self::Swap { improvement, .. } => *improvement,
-        }
-    }
-}
-
-fn format_repair_move(value: &RepairAllocationMove) -> String {
-    match value {
-        RepairAllocationMove::Reassign { source_actor, candidate_actor, force_actor, .. } => format!(
-            "reassign(source={}, candidate={})",
-            get_actor_id(source_actor),
-            if *force_actor {
-                format!("{}:forced", get_actor_id(candidate_actor))
-            } else {
-                get_actor_id(candidate_actor)
-            }
-        ),
-        RepairAllocationMove::Swap { left_actor, right_actor, .. } => {
-            format!("swap(left={}, right={})", get_actor_id(left_actor), get_actor_id(right_actor))
         }
     }
 }
@@ -698,13 +693,10 @@ fn evaluate_exact_candidate(
     }
 
     stats.exact_improving += 1;
-    let fitness = collect_fitness(&candidate_ctx);
-
     Some(ExactAllocationCandidate {
         allocation: allocation.clone(),
         insertion_ctx: candidate_ctx,
         cost: Some(candidate_cost),
-        fitness,
     })
 }
 
