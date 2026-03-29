@@ -153,8 +153,14 @@ fn match_place(single: &Arc<Single>, is_job_activity: bool, activity_ctx: &Activ
             .enumerate()
             .find(|(_, place)| {
                 let is_same_location = place.location.is_none_or(|l| l == activity_ctx.location);
-                let is_proper_time =
-                    place.times.iter().any(|time| time.intersects(activity_ctx.route_start_time, &activity_ctx.time));
+                let is_proper_time = place.times.iter().any(|time| {
+                    let mut time_window = time.to_time_window(activity_ctx.route_start_time);
+                    if !is_job_activity {
+                        time_window.end += place.duration;
+                    }
+
+                    time_window.intersects(&activity_ctx.time)
+                });
 
                 is_same_location && is_proper_time
             })

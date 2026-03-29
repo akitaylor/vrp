@@ -3,6 +3,7 @@
 mod initial_reader_test;
 
 use crate::format::solution::Activity as FormatActivity;
+use crate::format::solution::Schedule as FormatSchedule;
 use crate::format::solution::Stop as FormatStop;
 use crate::format::solution::Tour as FormatTour;
 use crate::format::solution::activity_matcher::{JobInfo, try_match_point_job};
@@ -14,10 +15,11 @@ use std::io::{BufReader, Read};
 use std::sync::Arc;
 use vrp_core::construction::heuristics::UnassignmentInfo;
 use vrp_core::models::common::*;
-use vrp_core::models::problem::{Actor, Job, JobIdDimension, VehicleIdDimension};
+use vrp_core::models::problem::{Actor, Job, VehicleIdDimension};
 use vrp_core::models::solution::Tour as CoreTour;
 use vrp_core::models::solution::{Activity, Registry, Route};
 use vrp_core::prelude::*;
+use vrp_core::solver::processing::ReservedTimesExtraProperty;
 
 type ActorKey = (String, String, usize);
 
@@ -36,33 +38,31 @@ pub fn read_init_solution<R: Read>(
     let actor_index = registry.all().map(|actor| (get_actor_key(actor.as_ref()), actor)).collect::<HashMap<_, _>>();
     let (job_index, coord_index) = get_indices(&problem.extras)?;
 
-    let routes =
-        solution.tours.iter().try_fold::<_, _, Result<_, GenericError>>(Vec::<_>::default(), |mut routes, tour| {
-            let actor_key = (tour.vehicle_id.clone(), tour.type_id.clone(), tour.shift_index);
-            let actor =
-                actor_index.get(&actor_key).ok_or_else(|| format!("cannot find vehicle for {actor_key:?}"))?.clone();
-            registry.use_actor(&actor);
+    let routes = solution.tours.iter().fold(Vec::<_>::default(), |mut routes, tour| {
+        let actor_key = (tour.vehicle_id.clone(), tour.type_id.clone(), tour.shift_index);
+        let Some(actor) = actor_index.get(&actor_key).cloned() else { return routes };
+        registry.use_actor(&actor);
 
-            let mut core_route = create_core_route(actor, tour)?;
+        let Ok(mut core_route) = create_core_route(actor, tour) else { return routes };
 
-            tour.stops.iter().try_for_each(|stop| {
-                stop.activities().iter().try_for_each::<_, Result<_, GenericError>>(|activity| {
-                    try_insert_activity(
-                        &mut core_route,
-                        tour,
-                        stop,
-                        activity,
-                        job_index.as_ref(),
-                        coord_index.as_ref(),
-                        &mut added_jobs,
-                    )
-                })
-            })?;
+        tour.stops.iter().for_each(|stop| {
+            stop.activities().iter().for_each(|activity| {
+                let _ = try_insert_activity(
+                    problem.as_ref(),
+                    &mut core_route,
+                    tour,
+                    stop,
+                    activity,
+                    job_index.as_ref(),
+                    coord_index.as_ref(),
+                    &mut added_jobs,
+                );
+            })
+        });
 
-            routes.push(core_route);
-
-            Ok(routes)
-        })?;
+        routes.push(core_route);
+        routes
+    });
 
     let mut unassigned = solution
         .unassigned
@@ -99,6 +99,7 @@ pub fn read_init_solution<R: Read>(
 }
 
 fn try_insert_activity(
+    problem: &Problem,
     route: &mut Route,
     tour: &FormatTour,
     stop: &FormatStop,
@@ -108,45 +109,80 @@ fn try_insert_activity(
     added_jobs: &mut HashSet<Job>,
 ) -> Result<(), GenericError> {
     if activity.commute.is_some() {
-        return Err("commute property in initial solution is not supported".into());
+        return Ok(());
     }
 
-    let stop = match stop {
-        FormatStop::Transit(_) => return Err("transit property in initial solution is not yet supported".into()),
-        FormatStop::Point(stop) => stop,
+    match stop {
+        FormatStop::Transit(stop) => {
+            return if activity.activity_type == "break" && matches_reserved_break(problem, route, tour, &stop.time, activity)?
+            {
+                Ok(())
+            } else {
+                Ok(())
+            };
+        }
+        FormatStop::Point(stop) => {
+            let matched_job = try_match_point_job(tour, stop, activity, job_index, coord_index);
+
+            match matched_job {
+                Err(_) if activity.activity_type == "break" && matches_reserved_break(problem, route, tour, &stop.time, activity)? => {}
+                Err(_) => return Ok(()),
+                Ok(Some(JobInfo(job, single, place, time))) => {
+                    let is_inserted = added_jobs.insert(job.clone());
+                    if !is_inserted && matches!(job, Job::Single(_)) {
+                        return Ok(());
+                    }
+
+                    route.tour.insert_last(Activity {
+                        place,
+                        schedule: Schedule { arrival: time.start, departure: time.end },
+                        job: Some(single),
+                        commute: None,
+                    });
+                }
+                Ok(None) => {
+                    if activity.activity_type != "departure" && activity.activity_type != "arrival" {
+                        return Ok(());
+                    }
+                }
+            }
+        }
     };
 
-    match try_match_point_job(tour, stop, activity, job_index, coord_index)? {
-        Some(JobInfo(job, single, place, time)) => {
-            let is_inserted = added_jobs.insert(job.clone());
-            if !is_inserted && matches!(job, Job::Single(_)) {
-                return Err(format!(
-                "potential double assignment for single job '{:?}', matched job id: '{:?}'; try to use a different tag as a discriminator",
-                activity.job_id,
-                job.dimens().get_job_id()
-            )
-            .into());
-            }
-
-            route.tour.insert_last(Activity {
-                place,
-                schedule: Schedule { arrival: time.start, departure: time.end },
-                job: Some(single),
-                commute: None,
-            });
-        }
-        _ => {
-            if activity.activity_type != "departure" && activity.activity_type != "arrival" {
-                return Err(format!(
-                    "cannot match activity with job id '{}' in tour: '{}'",
-                    activity.job_id, tour.vehicle_id
-                )
-                .into());
-            }
-        }
-    }
-
     Ok(())
+}
+
+fn matches_reserved_break(
+    problem: &Problem,
+    route: &Route,
+    tour: &FormatTour,
+    stop_schedule: &FormatSchedule,
+    activity: &FormatActivity,
+) -> Result<bool, GenericError> {
+    let Some(reserved_times) = problem.extras.get_reserved_times() else { return Ok(false) };
+    let Some(actor_times) = reserved_times.get(&route.actor) else { return Ok(false) };
+
+    let route_start_time = get_init_route_start_time(tour)?;
+    let activity_time = get_init_activity_time(activity, stop_schedule);
+
+    Ok(actor_times.iter().any(|reserved_time| {
+        let reserved_time = reserved_time.to_reserved_time_window(route_start_time);
+        let reserved_window = TimeWindow::new(reserved_time.time.start, reserved_time.time.end + reserved_time.duration);
+
+        reserved_window.intersects(&activity_time)
+    }))
+}
+
+fn get_init_activity_time(activity: &FormatActivity, stop_schedule: &FormatSchedule) -> TimeWindow {
+    activity
+        .time
+        .as_ref()
+        .map(|time| TimeWindow::new(parse_time(&time.start), parse_time(&time.end)))
+        .unwrap_or_else(|| TimeWindow::new(parse_time(&stop_schedule.arrival), parse_time(&stop_schedule.departure)))
+}
+
+fn get_init_route_start_time(tour: &FormatTour) -> Result<Timestamp, GenericError> {
+    tour.stops.first().map(|stop| parse_time(&stop.schedule().departure)).ok_or_else(|| "empty route".into())
 }
 
 fn get_actor_key(actor: &Actor) -> ActorKey {

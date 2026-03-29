@@ -41,6 +41,13 @@ fn create_default_breaks() -> Option<Vec<VehicleBreak>> {
     }])
 }
 
+fn create_required_breaks() -> Option<Vec<VehicleBreak>> {
+    Some(vec![VehicleBreak::Required {
+        time: VehicleRequiredBreakTime::OffsetTime { earliest: 5.0, latest: 10.0 },
+        duration: 2.0,
+    }])
+}
+
 fn create_unassigned_jobs(job_ids: &[&str]) -> Option<Vec<UnassignedJob>> {
     Some(
         job_ids
@@ -138,6 +145,150 @@ fn can_read_basic_init_solution() {
         get_init_solution(problem, &solution).unwrap_or_else(|err| panic!("cannot get solution: {err}"));
 
     assert_eq!(result_solution, solution);
+}
+
+#[test]
+fn can_read_required_break_which_starts_at_latest_offset_boundary() {
+    let problem = create_basic_problem(create_required_breaks());
+
+    let solution = SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![1]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((1., 0.))
+                        .schedule_stamp(1., 2.)
+                        .load(vec![0])
+                        .distance(1)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::default()
+                        .coordinate((2., 0.))
+                        .schedule_stamp(10., 12.)
+                        .load(vec![0])
+                        .distance(2)
+                        .activity(ActivityBuilder::break_type().time_stamp(10., 12.).build())
+                        .build(),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(14., 14.)
+                        .load(vec![0])
+                        .distance(4)
+                        .build_arrival(),
+                ])
+                .statistic(StatisticBuilder::default().driving(4).serving(1).break_time(2).build())
+                .build(),
+        )
+        .unassigned(create_unassigned_jobs(&["job2", "job3"]))
+        .build();
+
+    let result_solution =
+        get_init_solution(problem, &solution).unwrap_or_else(|err| panic!("cannot get solution: {err}"));
+
+    assert_eq!(result_solution, solution);
+}
+
+#[test]
+fn can_read_required_break_on_transit_stop() {
+    let problem = create_basic_problem(create_required_breaks());
+
+    let solution = SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![1]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((1., 0.))
+                        .schedule_stamp(1., 2.)
+                        .load(vec![0])
+                        .distance(1)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::new_transit()
+                        .schedule_stamp(10., 12.)
+                        .load(vec![0])
+                        .build_single("break", "break"),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(14., 14.)
+                        .load(vec![0])
+                        .distance(2)
+                        .build_arrival(),
+                ])
+                .statistic(StatisticBuilder::default().driving(2).serving(1).break_time(2).build())
+                .build(),
+        )
+        .unassigned(create_unassigned_jobs(&["job2", "job3"]))
+        .build();
+
+    let result_solution =
+        get_init_solution(problem, &solution).unwrap_or_else(|err| panic!("cannot get solution: {err}"));
+
+    assert_eq!(result_solution, solution);
+}
+
+#[test]
+fn can_ignore_unmatched_activity_and_keep_job_unassigned() {
+    let problem = create_basic_problem(None);
+
+    let solution = SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![1]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((99., 99.))
+                        .schedule_stamp(1., 2.)
+                        .load(vec![0])
+                        .distance(1)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(3., 3.)
+                        .load(vec![0])
+                        .distance(2)
+                        .build_arrival(),
+                ])
+                .build(),
+        )
+        .build();
+
+    let result_solution = get_init_solution(problem, &solution).unwrap();
+
+    assert!(result_solution.tours.iter().flat_map(|tour| tour.stops.iter()).flat_map(|stop| stop.activities()).all(|a| a.job_id != "job1"));
+    assert!(result_solution.unassigned.unwrap_or_default().iter().any(|job| job.job_id == "job1"));
+}
+
+#[test]
+fn can_ignore_unknown_vehicle_tour_and_keep_jobs_unassigned() {
+    let problem = create_basic_problem(None);
+
+    let solution = SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .vehicle_id("unknown_vehicle")
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![1]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((1., 0.))
+                        .schedule_stamp(1., 2.)
+                        .load(vec![0])
+                        .distance(1)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(3., 3.)
+                        .load(vec![0])
+                        .distance(2)
+                        .build_arrival(),
+                ])
+                .build(),
+        )
+        .build();
+
+    let result_solution = get_init_solution(problem, &solution).unwrap();
+
+    assert!(result_solution.tours.is_empty());
+    assert!(result_solution.unassigned.unwrap_or_default().iter().any(|job| job.job_id == "job1"));
 }
 
 #[test]
