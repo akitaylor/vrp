@@ -981,6 +981,7 @@ pub fn create_builder_from_config(
     solutions: Vec<InsertionContext>,
     config: &Config,
 ) -> GenericResult<ProblemConfigBuilder> {
+    let init_solution_len = solutions.len();
     let environment =
         configure_from_environment(&config.environment, config.termination.as_ref().and_then(|t| t.max_time));
     let telemetry_mode = get_telemetry_mode(environment.clone(), &config.telemetry);
@@ -990,13 +991,16 @@ pub fn create_builder_from_config(
         .set_environment(environment.clone())
         .set_telemetry_mode(telemetry_mode.clone())
         .prebuild()?
-        .with_init_solutions(solutions, None);
+        .with_init_solutions(Vec::default(), None);
 
     builder = configure_from_processing(builder, &config.vehicle_allocation);
     builder =
         configure_from_evolution(builder, problem.clone(), environment.clone(), telemetry_mode, &config.evolution)?;
     builder = configure_from_hyper(builder, problem, environment, &config.hyper)?;
     builder = configure_from_termination(builder, &config.termination);
+    if init_solution_len > 0 {
+        builder = builder.with_init_solutions(solutions, Some(init_solution_len));
+    }
 
     Ok(builder)
 }

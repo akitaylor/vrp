@@ -310,7 +310,7 @@ fn from_cli_parameters(
         TelemetryMode::None
     };
     let min_cv = get_min_cv(matches)?;
-    let init_size = get_init_size(matches)?;
+    let init_size = get_effective_init_size(&init_solutions, get_init_size(matches)?);
     let mode = matches.get_one::<String>(SEARCH_MODE_ARG_NAME);
 
     let config = VrpConfigBuilder::new(problem.clone())
@@ -331,6 +331,10 @@ fn from_cli_parameters(
         .build()?;
 
     Ok(Solver::new(problem, config))
+}
+
+fn get_effective_init_size(init_solutions: &[InsertionContext], init_size: Option<usize>) -> Option<usize> {
+    init_size.or_else(|| (!init_solutions.is_empty()).then_some(init_solutions.len()))
 }
 
 fn get_min_cv(matches: &ArgMatches) -> GenericResult<Option<(String, usize, Float, bool)>> {

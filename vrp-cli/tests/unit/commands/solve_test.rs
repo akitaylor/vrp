@@ -160,6 +160,17 @@ fn can_use_init_size() {
 }
 
 #[test]
+fn can_infer_init_size_from_provided_init_solutions() {
+    let problem = Arc::new(create_example_problem());
+    let environment = Arc::new(Environment::default());
+    let init_solution = InsertionContext::new(problem.clone(), environment);
+
+    assert_eq!(get_effective_init_size(&[], None), None);
+    assert_eq!(get_effective_init_size(&[init_solution.deep_copy()], None), Some(1));
+    assert_eq!(get_effective_init_size(&[init_solution], Some(3)), Some(3));
+}
+
+#[test]
 fn can_specify_cv() {
     for (params, result) in [
         (vec!["--min-cv", "sample,200,0.05,true"], Ok(Some(("sample".to_string(), 200, 0.05, true)))),
