@@ -179,9 +179,9 @@ fn check_e1307_vehicle_offset_break_rescheduling(ctx: &ValidationContext) -> Res
                 .breaks
                 .as_ref()
                 .map(|breaks| {
-                    let has_time_offset = breaks
-                        .iter()
-                        .any(|br| matches!(br, VehicleBreak::Optional { time: VehicleOptionalBreakTime::TimeOffset(_), .. }));
+                    let has_time_offset = breaks.iter().any(|br| {
+                        matches!(br, VehicleBreak::Optional { time: VehicleOptionalBreakTime::TimeOffset(_), .. })
+                    });
                     let has_rescheduling =
                         shift.start.latest.as_ref().is_none_or(|latest| *latest != shift.start.earliest);
 

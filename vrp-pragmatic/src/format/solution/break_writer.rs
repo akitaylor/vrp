@@ -61,11 +61,13 @@ pub(super) fn insert_reserved_times_as_breaks(
             let break_cost = break_time as Float * route.actor.vehicle.costs.per_service_time;
 
             if let Some((stop_idx, reserved_tw)) = tour.stops.iter().enumerate().find_map(|(stop_idx, stop)| {
-                let stop_tw = TimeWindow::new(parse_time(&stop.schedule().arrival), parse_time(&stop.schedule().departure));
+                let stop_tw =
+                    TimeWindow::new(parse_time(&stop.schedule().arrival), parse_time(&stop.schedule().departure));
                 get_reserved_time_window(&stop_tw, &reserved_time).map(|reserved_tw| (stop_idx, reserved_tw))
             }) {
                 let stop = tour.stops.get_mut(stop_idx).expect("expected stop");
-                let stop_tw = TimeWindow::new(parse_time(&stop.schedule().arrival), parse_time(&stop.schedule().departure));
+                let stop_tw =
+                    TimeWindow::new(parse_time(&stop.schedule().arrival), parse_time(&stop.schedule().departure));
 
                 insert_break(
                     (stop, stop_tw, stop_idx),
@@ -153,7 +155,10 @@ enum BreakInsertion {
     TransitBreakUsed { leg_idx: usize, load: Vec<i32>, break_tw: TimeWindow },
 }
 
-fn get_reserved_time_window(schedule: &TimeWindow, reserved_time: &vrp_core::construction::enablers::ReservedTimeWindow) -> Option<TimeWindow> {
+fn get_reserved_time_window(
+    schedule: &TimeWindow,
+    reserved_time: &vrp_core::construction::enablers::ReservedTimeWindow,
+) -> Option<TimeWindow> {
     let reserved_start = reserved_time.time.start;
     let reserved_end = reserved_time.time.end;
     let actual_start = schedule.start.clamp(reserved_start, reserved_end);
@@ -187,6 +192,8 @@ fn resolve_reserved_time_window(
         .map(|schedule| schedule.end.min(reserved_time.time.end))
         .max_by(|left, right| left.total_cmp(right));
 
-    latest_start
-        .map(|start| vrp_core::construction::enablers::ReservedTimeWindow { time: TimeWindow::new(start, start), duration: reserved_time.duration })
+    latest_start.map(|start| vrp_core::construction::enablers::ReservedTimeWindow {
+        time: TimeWindow::new(start, start),
+        duration: reserved_time.duration,
+    })
 }

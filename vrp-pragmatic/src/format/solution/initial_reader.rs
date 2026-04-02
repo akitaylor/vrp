@@ -114,7 +114,8 @@ fn try_insert_activity(
 
     match stop {
         FormatStop::Transit(stop) => {
-            return if activity.activity_type == "break" && matches_reserved_break(problem, route, tour, &stop.time, activity)?
+            return if activity.activity_type == "break"
+                && matches_reserved_break(problem, route, tour, &stop.time, activity)?
             {
                 Ok(())
             } else {
@@ -125,7 +126,9 @@ fn try_insert_activity(
             let matched_job = try_match_point_job(tour, stop, activity, job_index, coord_index);
 
             match matched_job {
-                Err(_) if activity.activity_type == "break" && matches_reserved_break(problem, route, tour, &stop.time, activity)? => {}
+                Err(_)
+                    if activity.activity_type == "break"
+                        && matches_reserved_break(problem, route, tour, &stop.time, activity)? => {}
                 Err(_) => return Ok(()),
                 Ok(Some(JobInfo(job, single, place, time))) => {
                     let is_inserted = added_jobs.insert(job.clone());
@@ -167,7 +170,8 @@ fn matches_reserved_break(
 
     Ok(actor_times.iter().any(|reserved_time| {
         let reserved_time = reserved_time.to_reserved_time_window(route_start_time);
-        let reserved_window = TimeWindow::new(reserved_time.time.start, reserved_time.time.end + reserved_time.duration);
+        let reserved_window =
+            TimeWindow::new(reserved_time.time.start, reserved_time.time.end + reserved_time.duration);
 
         reserved_window.intersects(&activity_time)
     }))

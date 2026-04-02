@@ -3,15 +3,10 @@
 mod context_test;
 
 use crate::construction::enablers::{TotalDistanceTourState, TotalDurationTourState};
-use crate::construction::features::VehicleOvertimeDimension;
+use crate::construction::features::{MaxVehicleLoadTourState, VehicleOvertimeDimension};
 use crate::construction::heuristics::factories::*;
 use crate::construction::heuristics::{
-    BestResultSelector,
-    EvaluationContext,
-    InsertionPosition,
-    InsertionResult,
-    LegSelection,
-    apply_insertion_success,
+    BestResultSelector, EvaluationContext, InsertionPosition, InsertionResult, LegSelection, apply_insertion_success,
     eval_job_insertion_in_route,
 };
 use crate::models::GoalContext;
@@ -62,6 +57,8 @@ impl InsertionContext {
         environment: Arc<Environment>,
     ) -> Self {
         let mut ctx = create_insertion_context_from_solution(problem, solution, environment);
+        ctx.restore();
+        unassign_invalid_routes_by_capacity(&mut ctx);
         ctx.restore();
 
         ctx
@@ -135,6 +132,56 @@ fn remove_terminal_reload_markers(solution_ctx: &mut SolutionContext) -> bool {
     });
 
     removed_any
+}
+
+fn unassign_invalid_routes_by_capacity(insertion_ctx: &mut InsertionContext) {
+    let invalid_routes = insertion_ctx
+        .solution
+        .routes
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, route_ctx)| {
+            route_ctx
+                .state()
+                .get_max_vehicle_load()
+                .copied()
+                .filter(|load_ratio| *load_ratio > 1. + Float::EPSILON)
+                .map(|load_ratio| (idx, route_ctx.route().actor.clone(), load_ratio))
+        })
+        .collect::<Vec<_>>();
+
+    if invalid_routes.is_empty() {
+        return;
+    }
+
+    let mut invalid_jobs: HashSet<Job> = HashSet::new();
+    let invalid_indices = invalid_routes.iter().map(|(idx, _, _)| *idx).collect::<HashSet<_>>();
+
+    invalid_routes.iter().for_each(|(_, actor, load_ratio)| {
+        let vehicle_id = actor.vehicle.dimens.get_vehicle_id().cloned().unwrap_or_else(|| "unknown".to_string());
+        (insertion_ctx.environment.logger)(
+            format!(
+                "init solution warning: moving overloaded route to unassigned, vehicle_id={vehicle_id}, max_load_ratio={load_ratio:.3}"
+            )
+            .as_str(),
+        );
+    });
+
+    invalid_indices.iter().for_each(|idx| {
+        invalid_jobs.extend(insertion_ctx.solution.routes[*idx].route().tour.jobs().cloned());
+    });
+
+    insertion_ctx.solution.required.retain(|job| !invalid_jobs.contains(job));
+    insertion_ctx.solution.ignored.retain(|job| !invalid_jobs.contains(job));
+    insertion_ctx.solution.unassigned.extend(invalid_jobs.into_iter().map(|job| (job, UnassignmentInfo::Unknown)));
+
+    let (keep_routes, remove_routes): (Vec<_>, Vec<_>) =
+        insertion_ctx.solution.routes.drain(0..).enumerate().partition(|(idx, _)| !invalid_indices.contains(idx));
+
+    remove_routes.into_iter().map(|(_, route_ctx)| route_ctx).for_each(|route_ctx| {
+        assert!(insertion_ctx.solution.registry.free_route(route_ctx));
+    });
+    insertion_ctx.solution.routes = keep_routes.into_iter().map(|(_, route_ctx)| route_ctx).collect();
 }
 
 /// Restores solution state and tries to reinsert pending conditional jobs such as breaks or reloads.
@@ -219,7 +266,13 @@ fn try_insert_pending_conditional_jobs(insertion_ctx: &mut InsertionContext) {
         };
         let result = {
             let route_ctx = &insertion_ctx.solution.routes[route_idx];
-            eval_job_insertion_in_route(insertion_ctx, &eval_ctx, route_ctx, InsertionPosition::Any, InsertionResult::make_failure())
+            eval_job_insertion_in_route(
+                insertion_ctx,
+                &eval_ctx,
+                route_ctx,
+                InsertionPosition::Any,
+                InsertionResult::make_failure(),
+            )
         };
 
         if let InsertionResult::Success(success) = result {
@@ -233,9 +286,11 @@ fn try_insert_pending_conditional_jobs(insertion_ctx: &mut InsertionContext) {
 fn find_conditional_route(insertion_ctx: &InsertionContext, job: &Job) -> Option<usize> {
     let vehicle_id = job.dimens().get_vehicle_id()?;
 
-    insertion_ctx.solution.routes.iter().position(|route_ctx| {
-        route_ctx.route().actor.vehicle.dimens.get_vehicle_id() == Some(vehicle_id)
-    })
+    insertion_ctx
+        .solution
+        .routes
+        .iter()
+        .position(|route_ctx| route_ctx.route().actor.vehicle.dimens.get_vehicle_id() == Some(vehicle_id))
 }
 
 impl HeuristicSolution for InsertionContext {

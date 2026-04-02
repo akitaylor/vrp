@@ -4,8 +4,8 @@ use crate::helpers::models::domain::TestGoalContextBuilder;
 use crate::helpers::models::problem::{TestSingleBuilder, test_fleet};
 use crate::helpers::models::solution::*;
 use crate::models::common::Schedule;
-use crate::models::{FeatureBuilder, FeatureObjective, FeatureState};
 use crate::models::problem::{Job, JobIdDimension};
+use crate::models::{FeatureBuilder, FeatureObjective, FeatureState};
 use std::sync::{Arc, Mutex};
 
 struct NoopObjective;
@@ -120,7 +120,8 @@ fn can_use_debug_fmt_for_insertion_ctx() {
 #[test]
 fn solution_conversion_restores_insertion_context_first() {
     let calls = Arc::new(Mutex::new(0));
-    let objective_feature = FeatureBuilder::default().with_name("objective").with_objective(NoopObjective).build().unwrap();
+    let objective_feature =
+        FeatureBuilder::default().with_name("objective").with_objective(NoopObjective).build().unwrap();
     let mutate_feature = FeatureBuilder::default()
         .with_name("mutate")
         .with_state(CountSolutionAcceptState { calls: calls.clone() })

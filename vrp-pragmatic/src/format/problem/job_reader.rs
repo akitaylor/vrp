@@ -1,3 +1,4 @@
+use super::skills_index::SkillIndex;
 use crate::format::coord_index::CoordIndex;
 use crate::format::problem::JobSkills as ApiJobSkills;
 use crate::format::problem::*;
@@ -5,7 +6,6 @@ use crate::format::{JobIndex, Location};
 use crate::utils::VariableJobPermutation;
 use std::collections::HashMap;
 use std::sync::Arc;
-use super::skills_index::SkillIndex;
 use vrp_core::{
     construction::features::{
         BreakPolicy, JobCompatibilityDimension, JobDemandDimension, JobGroupDimension, JobSkills as FeatureJobSkills,

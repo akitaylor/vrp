@@ -86,7 +86,9 @@ fn can_search_for_offset_reserved_time_using_full_window() {
     let route_ctx = RouteContextBuilder::default()
         .with_route(
             RouteBuilder::default()
-                .add_activity(ActivityBuilder::with_location_tw_and_duration(10, TimeWindow::new(0., 100.), 24.).build())
+                .add_activity(
+                    ActivityBuilder::with_location_tw_and_duration(10, TimeWindow::new(0., 100.), 24.).build(),
+                )
                 .build(),
         )
         .build();
@@ -291,7 +293,8 @@ fn can_evaluate_activity_impl(
 #[test]
 fn can_evaluate_activity_with_offset_reserved_time_window() {
     let reserved_time = ReservedTimeSpan { time: TimeSpan::Offset(TimeOffset::new(10., 20.)), duration: 10. };
-    let (_, feature, mut route_ctx) = create_feature_and_route((0, 0, 0., 100.), vec![(20, (0., 100.), 10.)], reserved_time);
+    let (_, feature, mut route_ctx) =
+        create_feature_and_route((0, 0, 0., 100.), vec![(20, (0., 100.), 10.)], reserved_time);
     let (feature_constraint, feature_state) = (feature.constraint.unwrap(), feature.state.unwrap());
     let prev = route_ctx.route().tour.get(0).unwrap();
     let target = ActivityBuilder::with_location_tw_and_duration(10, TimeWindow::new(0., 100.), 10.).build();

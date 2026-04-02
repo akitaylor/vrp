@@ -17,7 +17,5 @@ pub use self::vicinity_clustering::*;
 
 mod vehicle_allocation;
 pub use self::vehicle_allocation::{
-    VehicleAllocation,
-    VehicleAllocationSettings,
-    VehicleAllocationSettingsExtraProperty,
+    VehicleAllocation, VehicleAllocationSettings, VehicleAllocationSettingsExtraProperty,
 };

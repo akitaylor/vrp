@@ -203,10 +203,7 @@ fn can_read_required_break_on_transit_stop() {
                         .load(vec![0])
                         .distance(1)
                         .build_single("job1", "delivery"),
-                    StopBuilder::new_transit()
-                        .schedule_stamp(10., 12.)
-                        .load(vec![0])
-                        .build_single("break", "break"),
+                    StopBuilder::new_transit().schedule_stamp(10., 12.).load(vec![0]).build_single("break", "break"),
                     StopBuilder::default()
                         .coordinate((0., 0.))
                         .schedule_stamp(14., 14.)
@@ -254,7 +251,14 @@ fn can_ignore_unmatched_activity_and_keep_job_unassigned() {
 
     let result_solution = get_init_solution(problem, &solution).unwrap();
 
-    assert!(result_solution.tours.iter().flat_map(|tour| tour.stops.iter()).flat_map(|stop| stop.activities()).all(|a| a.job_id != "job1"));
+    assert!(
+        result_solution
+            .tours
+            .iter()
+            .flat_map(|tour| tour.stops.iter())
+            .flat_map(|stop| stop.activities())
+            .all(|a| a.job_id != "job1")
+    );
     assert!(result_solution.unassigned.unwrap_or_default().iter().any(|job| job.job_id == "job1"));
 }
 
@@ -289,6 +293,43 @@ fn can_ignore_unknown_vehicle_tour_and_keep_jobs_unassigned() {
 
     assert!(result_solution.tours.is_empty());
     assert!(result_solution.unassigned.unwrap_or_default().iter().any(|job| job.job_id == "job1"));
+}
+
+#[test]
+fn can_move_overloaded_init_route_to_unassigned() {
+    let mut problem = create_basic_problem(None);
+    problem.fleet.vehicles[0].capacity = vec![0];
+
+    let solution = SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![1]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((1., 0.))
+                        .schedule_stamp(1., 2.)
+                        .load(vec![0])
+                        .distance(1)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(3., 3.)
+                        .load(vec![0])
+                        .distance(2)
+                        .build_arrival(),
+                ])
+                .build(),
+        )
+        .unassigned(create_unassigned_jobs(&["job2", "job3"]))
+        .build();
+
+    let result_solution = get_init_solution(problem, &solution).unwrap();
+    assert!(result_solution.tours.is_empty());
+    let mut unassigned =
+        result_solution.unassigned.unwrap_or_default().into_iter().map(|job| job.job_id).collect::<Vec<_>>();
+    unassigned.sort();
+
+    assert_eq!(unassigned, vec!["job1".to_string(), "job2".to_string(), "job3".to_string()]);
 }
 
 #[test]

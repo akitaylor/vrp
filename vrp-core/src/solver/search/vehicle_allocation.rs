@@ -1,7 +1,7 @@
 use crate::construction::heuristics::InsertionContext;
 use crate::models::GoalContext;
-use crate::solver::processing::{VehicleAllocation, VehicleAllocationSettings};
 use crate::solver::RefinementContext;
+use crate::solver::processing::{VehicleAllocation, VehicleAllocationSettings};
 use rosomaxa::{
     HeuristicContext,
     population::SelectionPhase,
@@ -17,9 +17,11 @@ const IN_SEARCH_MAX_ITERATIONS: usize = 1;
 
 /// Applies vehicle allocation periodically during search.
 pub struct VehicleAllocationSearch {
-    inner: Arc<dyn HeuristicSearchOperator<Context = RefinementContext, Objective = GoalContext, Solution = InsertionContext>
-        + Send
-        + Sync>,
+    inner: Arc<
+        dyn HeuristicSearchOperator<Context = RefinementContext, Objective = GoalContext, Solution = InsertionContext>
+            + Send
+            + Sync,
+    >,
     allocation: VehicleAllocation,
     interval: usize,
     log: bool,
@@ -41,8 +43,11 @@ impl VehicleAllocationSearch {
     /// Creates a new operator which applies allocation at a given interval.
     pub fn new(
         inner: Arc<
-            dyn HeuristicSearchOperator<Context = RefinementContext, Objective = GoalContext, Solution = InsertionContext>
-                + Send
+            dyn HeuristicSearchOperator<
+                    Context = RefinementContext,
+                    Objective = GoalContext,
+                    Solution = InsertionContext,
+                > + Send
                 + Sync,
         >,
         settings: Arc<VehicleAllocationSettings>,
@@ -115,7 +120,10 @@ impl VehicleAllocationSearch {
         guard.last_report_generation = generation;
     }
 
-    fn collect_best_candidate_solution(&self, heuristic_ctx: &RefinementContext) -> Option<(InsertionContext, u64, usize, usize)> {
+    fn collect_best_candidate_solution(
+        &self,
+        heuristic_ctx: &RefinementContext,
+    ) -> Option<(InsertionContext, u64, usize, usize)> {
         if self.top_k == 0 && self.samples == 0 {
             return None;
         }

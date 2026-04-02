@@ -237,11 +237,13 @@ impl ProblemBuilder {
         let extras = self.extras.take().unwrap_or_else(|| Arc::new(Extras::default()));
 
         if let Some(stats) = apply_skill_bitsets(&mut self.jobs, &mut self.vehicles) {
-            (logger)(format!(
-                "skills: bitset enabled; skills={}, bits={}, jobs={}, vehicles={}",
-                stats.skill_count, stats.bitset_len, stats.job_count, stats.vehicle_count
-            )
-            .as_str());
+            (logger)(
+                format!(
+                    "skills: bitset enabled; skills={}, bits={}, jobs={}, vehicles={}",
+                    stats.skill_count, stats.bitset_len, stats.job_count, stats.vehicle_count
+                )
+                .as_str(),
+            );
         }
 
         // setup fleet

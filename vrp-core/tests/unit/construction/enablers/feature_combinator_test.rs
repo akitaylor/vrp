@@ -2,8 +2,8 @@ use crate::construction::heuristics::{MoveContext, SolutionContext};
 use crate::helpers::construction::heuristics::TestInsertionContextBuilder;
 use crate::helpers::models::solution::{ActivityBuilder, RouteBuilder, RouteContextBuilder};
 use crate::models::common::Cost;
-use crate::models::{FeatureBuilder, FeatureObjective, FeatureState, GoalContextBuilder};
 use crate::models::problem::Job;
+use crate::models::{FeatureBuilder, FeatureObjective, FeatureState, GoalContextBuilder};
 use std::sync::{Arc, Mutex};
 
 struct RecomputeState {
@@ -16,15 +16,12 @@ impl FeatureState for RecomputeState {
     fn accept_route_state(&self, _: &mut crate::construction::heuristics::RouteContext) {}
 
     fn accept_solution_state(&self, solution_ctx: &mut SolutionContext) {
-        solution_ctx
-            .routes
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, route_ctx)| route_ctx.is_stale())
-            .for_each(|(idx, route_ctx)| {
+        solution_ctx.routes.iter_mut().enumerate().filter(|(_, route_ctx)| route_ctx.is_stale()).for_each(
+            |(idx, route_ctx)| {
                 self.visited.lock().unwrap().push(idx);
                 route_ctx.mark_stale(false);
-            });
+            },
+        );
     }
 }
 
@@ -80,9 +77,12 @@ fn can_detect_stale_route_set_changes_between_solution_state_passes() {
         .unwrap();
     let mark_stale_feature =
         FeatureBuilder::default().with_name("mark_stale").with_state(MarkOtherRouteStaleState).build().unwrap();
-    let objective_feature = FeatureBuilder::default().with_name("objective").with_objective(NoopObjective).build().unwrap();
-    let goal =
-        GoalContextBuilder::with_features(&[objective_feature, recompute_feature, mark_stale_feature]).unwrap().build().unwrap();
+    let objective_feature =
+        FeatureBuilder::default().with_name("objective").with_objective(NoopObjective).build().unwrap();
+    let goal = GoalContextBuilder::with_features(&[objective_feature, recompute_feature, mark_stale_feature])
+        .unwrap()
+        .build()
+        .unwrap();
 
     let route1 = RouteContextBuilder::default().with_route(RouteBuilder::default().build()).build();
     let mut route2 = RouteContextBuilder::default().with_route(RouteBuilder::default().build()).build();
@@ -111,8 +111,12 @@ fn can_detect_same_stale_route_when_it_is_mutated_between_solution_state_passes(
         .with_state(MutateSameRouteOnceState { mutated })
         .build()
         .unwrap();
-    let objective_feature = FeatureBuilder::default().with_name("objective").with_objective(NoopObjective).build().unwrap();
-    let goal = GoalContextBuilder::with_features(&[objective_feature, recompute_feature, mutate_feature]).unwrap().build().unwrap();
+    let objective_feature =
+        FeatureBuilder::default().with_name("objective").with_objective(NoopObjective).build().unwrap();
+    let goal = GoalContextBuilder::with_features(&[objective_feature, recompute_feature, mutate_feature])
+        .unwrap()
+        .build()
+        .unwrap();
 
     let route = RouteContextBuilder::default()
         .with_route(RouteBuilder::default().add_activity(ActivityBuilder::default().build()).build())

@@ -159,12 +159,7 @@ pub(crate) fn apply_skill_bitsets(jobs: &mut [Job], vehicles: &mut [Vehicle]) ->
         }
     }
 
-    Some(SkillBitsetStats {
-        skill_count: skill_index.len(),
-        bitset_len: bits_len,
-        job_count,
-        vehicle_count,
-    })
+    Some(SkillBitsetStats { skill_count: skill_index.len(), bitset_len: bits_len, job_count, vehicle_count })
 }
 
 /// Creates a skills feature as hard constraint.
@@ -311,11 +306,7 @@ fn check_none_of_bits(job_bits: &JobSkillsBitset, vehicle_bits: &VehicleSkillsBi
     true
 }
 
-fn build_bits(
-    skills: Option<&HashSet<String>>,
-    skill_index: &HashMap<String, usize>,
-    bits_len: usize,
-) -> Vec<u64> {
+fn build_bits(skills: Option<&HashSet<String>>, skill_index: &HashMap<String, usize>, bits_len: usize) -> Vec<u64> {
     match skills {
         Some(skills) if !skills.is_empty() => {
             let mut bits = vec![0u64; bits_len];

@@ -4,34 +4,18 @@ use super::*;
 mod vehicle_allocation_test;
 
 use crate::construction::enablers::{
-    advance_departure_time,
-    create_reserved_times_fn,
-    optimize_reserved_times_schedule,
+    TotalDurationTourState, advance_departure_time, create_reserved_times_fn, optimize_reserved_times_schedule,
     update_route_schedule,
-    TotalDurationTourState,
 };
 use crate::construction::features::{
-    JobSkills,
-    JobSkillsBitset,
-    JobSkillsBitsetDimension,
-    JobSkillsDimension,
-    VehicleOvertimeDimension,
-    VehicleSkillsBitset,
-    VehicleSkillsBitsetDimension,
-    VehicleSkillsDimension,
+    JobSkills, JobSkillsBitset, JobSkillsBitsetDimension, JobSkillsDimension, MaxVehicleLoadTourState,
+    VehicleOvertimeDimension, VehicleSkillsBitset, VehicleSkillsBitsetDimension, VehicleSkillsDimension,
 };
 use crate::construction::heuristics::*;
 use crate::models::Extras;
 use crate::models::common::{Cost, TimeSpan, TimeWindow};
 use crate::models::problem::{
-    ActivityCost,
-    Actor,
-    Job,
-    JobIdDimension,
-    Single,
-    TransportCost,
-    TravelTime,
-    VehicleIdDimension,
+    ActivityCost, Actor, Job, JobIdDimension, Single, TransportCost, TravelTime, VehicleIdDimension,
 };
 use crate::models::solution::Activity;
 use crate::utils::InfoLogger;
@@ -82,12 +66,7 @@ pub struct VehicleAllocation {
 impl VehicleAllocation {
     /// Creates a new instance with configurable behavior.
     pub fn new(max_iterations: usize, allow_unused: bool, allow_swaps: bool, log: bool) -> Self {
-        Self {
-            max_iterations: max_iterations.max(1),
-            allow_unused,
-            allow_swaps,
-            log,
-        }
+        Self { max_iterations: max_iterations.max(1), allow_unused, allow_swaps, log }
     }
 }
 
@@ -145,8 +124,11 @@ impl VehicleAllocation {
         let mut debug_state = DebugLogState::new(DEBUG_FAILURE_LOG_LIMIT);
 
         for _ in 0..self.max_iterations {
-            let route_infos =
-                build_route_infos(&insertion_ctx, insertion_ctx.problem.activity.as_ref(), insertion_ctx.problem.transport.as_ref());
+            let route_infos = build_route_infos(
+                &insertion_ctx,
+                insertion_ctx.problem.activity.as_ref(),
+                insertion_ctx.problem.transport.as_ref(),
+            );
             if route_infos.is_empty() {
                 break;
             }
@@ -169,7 +151,7 @@ impl VehicleAllocation {
             if self.log {
                 (insertion_ctx.environment.logger)(
                     format!(
-                        "vehicle allocation stats: routes={}, routes_missing_cost={}, unused_actors={}, reassign_attempts={}, reassign_build_ok={}, reassign_improving={}, reassign_estimate_rejected={}, swap_attempts={}, swap_build_ok={}, swap_improving={}, swap_estimate_rejected={}, estimated_candidates={}, exact_attempts={}, exact_improving={}, exact_applied={}, signature_rejected={}, pending_break_rejected={}, prefilter_attempts={}, prefilter_vehicle_id={}, prefilter_skills={}, prefilter_time={}, build_failures={}",
+                        "vehicle allocation stats: routes={}, routes_missing_cost={}, unused_actors={}, reassign_attempts={}, reassign_build_ok={}, reassign_improving={}, reassign_estimate_rejected={}, swap_attempts={}, swap_build_ok={}, swap_improving={}, swap_estimate_rejected={}, estimated_candidates={}, exact_attempts={}, exact_improving={}, exact_applied={}, signature_rejected={}, pending_break_rejected={}, capacity_rejected={}, prefilter_attempts={}, prefilter_vehicle_id={}, prefilter_skills={}, prefilter_time={}, build_failures={}",
                         stats.routes_total,
                         stats.routes_missing_cost,
                         stats.unused_actors,
@@ -184,10 +166,11 @@ impl VehicleAllocation {
                         stats.estimated_candidates,
                         stats.exact_attempts,
                         stats.exact_improving,
-                        stats.exact_applied,
-                        stats.signature_rejected,
-                        stats.pending_break_rejected,
-                        stats.prefilter_attempts,
+                         stats.exact_applied,
+                         stats.signature_rejected,
+                         stats.pending_break_rejected,
+                         stats.capacity_rejected,
+                         stats.prefilter_attempts,
                         stats.prefilter_vehicle_id,
                         stats.prefilter_skills,
                         stats.prefilter_time,
@@ -233,6 +216,11 @@ impl VehicleAllocation {
             insertion_ctx = candidate.insertion_ctx;
             applied_moves += 1;
             stats.exact_applied += 1;
+
+            log_capacity_violations(
+                &insertion_ctx,
+                "vehicle allocation warning: capacity violation detected after applying allocation iteration",
+            );
         }
 
         insertion_ctx.problem.goal.accept_solution_state(&mut insertion_ctx.solution);
@@ -258,6 +246,34 @@ impl VehicleAllocation {
 
         insertion_ctx
     }
+}
+
+fn get_capacity_violations(insertion_ctx: &InsertionContext) -> Vec<(String, Float)> {
+    insertion_ctx
+        .solution
+        .routes
+        .iter()
+        .filter_map(|route_ctx| {
+            route_ctx
+                .state()
+                .get_max_vehicle_load()
+                .copied()
+                .filter(|load_ratio| *load_ratio > 1. + Float::EPSILON)
+                .map(|load_ratio| (get_actor_id(&route_ctx.route().actor), load_ratio))
+        })
+        .collect()
+}
+
+fn log_capacity_violations(insertion_ctx: &InsertionContext, prefix: &str) {
+    let violations = get_capacity_violations(insertion_ctx);
+    if violations.is_empty() {
+        return;
+    }
+
+    let details =
+        violations.iter().map(|(actor_id, ratio)| format!("{actor_id}:{ratio:.3}")).collect::<Vec<_>>().join(", ");
+
+    (insertion_ctx.environment.logger)(format!("{prefix}: {details}").as_str());
 }
 
 struct RouteInfo {
@@ -355,6 +371,7 @@ struct AllocationStats {
     exact_applied: usize,
     signature_rejected: usize,
     pending_break_rejected: usize,
+    capacity_rejected: usize,
     prefilter_attempts: usize,
     prefilter_vehicle_id: usize,
     prefilter_skills: usize,
@@ -382,6 +399,7 @@ impl AllocationStats {
             exact_applied: 0,
             signature_rejected: 0,
             pending_break_rejected: 0,
+            capacity_rejected: 0,
             prefilter_attempts: 0,
             prefilter_vehicle_id: 0,
             prefilter_skills: 0,
@@ -393,17 +411,8 @@ impl AllocationStats {
 
 #[derive(Clone)]
 enum RepairAllocationMove {
-    Reassign {
-        source_actor: Arc<Actor>,
-        candidate_actor: Arc<Actor>,
-        force_actor: bool,
-        improvement: Cost,
-    },
-    Swap {
-        left_actor: Arc<Actor>,
-        right_actor: Arc<Actor>,
-        improvement: Cost,
-    },
+    Reassign { source_actor: Arc<Actor>, candidate_actor: Arc<Actor>, force_actor: bool, improvement: Cost },
+    Swap { left_actor: Arc<Actor>, right_actor: Arc<Actor>, improvement: Cost },
 }
 
 impl RepairAllocationMove {
@@ -416,16 +425,8 @@ impl RepairAllocationMove {
 }
 
 enum AllocationMove {
-    Reassign {
-        route_idx: usize,
-        new_route: RouteContext,
-    },
-    Swap {
-        left_idx: usize,
-        right_idx: usize,
-        left_route: RouteContext,
-        right_route: RouteContext,
-    },
+    Reassign { route_idx: usize, new_route: RouteContext },
+    Swap { left_idx: usize, right_idx: usize, left_route: RouteContext, right_route: RouteContext },
 }
 
 fn build_route_infos(
@@ -447,12 +448,8 @@ fn build_route_infos(
 }
 
 fn collect_unused_actors(insertion_ctx: &InsertionContext) -> Vec<Arc<Actor>> {
-    let used = insertion_ctx
-        .solution
-        .routes
-        .iter()
-        .map(|route_ctx| route_ctx.route().actor.clone())
-        .collect::<HashSet<_>>();
+    let used =
+        insertion_ctx.solution.routes.iter().map(|route_ctx| route_ctx.route().actor.clone()).collect::<HashSet<_>>();
 
     insertion_ctx.problem.fleet.actors.iter().filter(|actor| !used.contains(*actor)).cloned().collect()
 }
@@ -600,7 +597,9 @@ fn find_best_exact_candidate(
 
     for allocation in estimated_candidates.into_iter().take(MAX_EXACT_CANDIDATES_PER_ITERATION) {
         stats.exact_attempts += 1;
-        if let Some(candidate) = evaluate_exact_candidate(insertion_ctx, &allocation, baseline_signature.as_slice(), stats) {
+        if let Some(candidate) =
+            evaluate_exact_candidate(insertion_ctx, &allocation, baseline_signature.as_slice(), stats)
+        {
             match allocation {
                 RepairAllocationMove::Reassign { .. } => {
                     stats.reassign_build_ok += 1;
@@ -664,7 +663,10 @@ fn estimate_swap_improvement(left: &RouteInfo, right: &RouteInfo, insertion_ctx:
     let left_new = estimate_route_cost_for_actor(left_route_ctx, &right.actor, activity, transport);
     let right_new = estimate_route_cost_for_actor(right_route_ctx, &left.actor, activity, transport);
 
-    left_new.zip(right_new).map(|(left_new, right_new)| (left_old + right_old) - (left_new + right_new)).unwrap_or_default()
+    left_new
+        .zip(right_new)
+        .map(|(left_new, right_new)| (left_old + right_old) - (left_new + right_new))
+        .unwrap_or_default()
 }
 
 fn evaluate_exact_candidate(
@@ -694,6 +696,15 @@ fn evaluate_exact_candidate(
         return None;
     }
 
+    if !get_capacity_violations(&candidate_ctx).is_empty() {
+        stats.capacity_rejected += 1;
+        log_capacity_violations(
+            &candidate_ctx,
+            "vehicle allocation warning: rejecting candidate with capacity violation",
+        );
+        return None;
+    }
+
     if candidate_cost + f64::EPSILON >= baseline_cost {
         return None;
     }
@@ -706,11 +717,16 @@ fn evaluate_exact_candidate(
     })
 }
 
-fn try_apply_exact_swap(insertion_ctx: &InsertionContext, allocation: &RepairAllocationMove) -> Option<InsertionContext> {
+fn try_apply_exact_swap(
+    insertion_ctx: &InsertionContext,
+    allocation: &RepairAllocationMove,
+) -> Option<InsertionContext> {
     match allocation {
         RepairAllocationMove::Reassign { source_actor, candidate_actor, force_actor, .. } if *force_actor => {
-            let route_idx = insertion_ctx.solution.routes.iter().position(|route_ctx| route_ctx.route().actor == *source_actor)?;
-            let new_route = replay_route_with_actor(insertion_ctx, &insertion_ctx.solution.routes[route_idx], candidate_actor)?;
+            let route_idx =
+                insertion_ctx.solution.routes.iter().position(|route_ctx| route_ctx.route().actor == *source_actor)?;
+            let new_route =
+                replay_route_with_actor(insertion_ctx, &insertion_ctx.solution.routes[route_idx], candidate_actor)?;
 
             let mut candidate_ctx = insertion_ctx.deep_copy();
             apply_move_to_context(&mut candidate_ctx, AllocationMove::Reassign { route_idx, new_route });
@@ -721,20 +737,19 @@ fn try_apply_exact_swap(insertion_ctx: &InsertionContext, allocation: &RepairAll
             Some(candidate_ctx)
         }
         RepairAllocationMove::Swap { left_actor, right_actor, .. } => {
-            let left_idx = insertion_ctx.solution.routes.iter().position(|route_ctx| route_ctx.route().actor == *left_actor)?;
-            let right_idx = insertion_ctx.solution.routes.iter().position(|route_ctx| route_ctx.route().actor == *right_actor)?;
-            let left_route = replay_route_with_actor(insertion_ctx, &insertion_ctx.solution.routes[left_idx], right_actor)?;
-            let right_route = replay_route_with_actor(insertion_ctx, &insertion_ctx.solution.routes[right_idx], left_actor)?;
+            let left_idx =
+                insertion_ctx.solution.routes.iter().position(|route_ctx| route_ctx.route().actor == *left_actor)?;
+            let right_idx =
+                insertion_ctx.solution.routes.iter().position(|route_ctx| route_ctx.route().actor == *right_actor)?;
+            let left_route =
+                replay_route_with_actor(insertion_ctx, &insertion_ctx.solution.routes[left_idx], right_actor)?;
+            let right_route =
+                replay_route_with_actor(insertion_ctx, &insertion_ctx.solution.routes[right_idx], left_actor)?;
 
             let mut candidate_ctx = insertion_ctx.deep_copy();
             apply_move_to_context(
                 &mut candidate_ctx,
-                AllocationMove::Swap {
-                    left_idx,
-                    right_idx,
-                    left_route,
-                    right_route,
-                },
+                AllocationMove::Swap { left_idx, right_idx, left_route, right_route },
             );
             candidate_ctx.restore();
             try_insert_conditional_jobs(&mut candidate_ctx);
@@ -755,7 +770,11 @@ fn replay_route_with_actor(
     route.actor = actor.clone();
 
     let mut route_ctx = RouteContext::new_with_state(route, RouteState::default());
-    update_route_schedule(&mut route_ctx, insertion_ctx.problem.activity.as_ref(), insertion_ctx.problem.transport.as_ref());
+    update_route_schedule(
+        &mut route_ctx,
+        insertion_ctx.problem.activity.as_ref(),
+        insertion_ctx.problem.transport.as_ref(),
+    );
     insertion_ctx.problem.goal.accept_route_state(&mut route_ctx);
     advance_departure_time(
         &mut route_ctx,
@@ -765,7 +784,8 @@ fn replay_route_with_actor(
     );
     insertion_ctx.problem.goal.accept_route_state(&mut route_ctx);
 
-    if let Some(reserved_times) = insertion_ctx.problem.extras.get_reserved_times().map(|times| times.as_ref().clone()) {
+    if let Some(reserved_times) = insertion_ctx.problem.extras.get_reserved_times().map(|times| times.as_ref().clone())
+    {
         if let Ok(reserved_times_fn) = create_reserved_times_fn(reserved_times) {
             optimize_reserved_times_schedule(route_ctx.route_mut(), &reserved_times_fn);
             route_ctx.mark_stale(false);
@@ -850,12 +870,8 @@ fn is_conditional_job(job: &Job) -> bool {
 }
 
 fn prefilter_actor_for_order(actor: &Actor, order: &[(Job, Arc<Single>)]) -> Option<PrefilterFailure> {
-    let date = actor
-        .detail
-        .start
-        .as_ref()
-        .map(|start| start.time.to_time_window().start)
-        .unwrap_or(actor.detail.time.start);
+    let date =
+        actor.detail.start.as_ref().map(|start| start.time.to_time_window().start).unwrap_or(actor.detail.time.start);
 
     for (job, _) in order.iter() {
         if let Some(details) = check_vehicle_id_mismatch(actor, job) {
@@ -910,29 +926,17 @@ fn check_skill_mismatch(actor: &Actor, job: &Job) -> Option<String> {
         && check_one_of(&job_skills, &vehicle_skills)
         && check_none_of(&job_skills, &vehicle_skills);
 
-    if is_ok {
-        None
-    } else {
-        Some(format_job_skills_details(&job_skills, vehicle_skills))
-    }
+    if is_ok { None } else { Some(format_job_skills_details(&job_skills, vehicle_skills)) }
 }
 
 fn check_time_window_mismatch(actor: &Actor, job: &Job, date: Float) -> Option<String> {
     let has_time_intersection = job_has_time_intersection(job, &actor.detail.time, date);
-    if has_time_intersection {
-        None
-    } else {
-        Some(format_job_time_window_details(job, &actor.detail.time, date))
-    }
+    if has_time_intersection { None } else { Some(format_job_time_window_details(job, &actor.detail.time, date)) }
 }
 
 fn job_has_time_intersection(job: &Job, actor_time: &TimeWindow, date: Float) -> bool {
     let check_single = |single: &Arc<Single>| {
-        single
-            .places
-            .iter()
-            .flat_map(|place| place.times.iter())
-            .any(|time| time.intersects(date, actor_time))
+        single.places.iter().flat_map(|place| place.times.iter()).any(|time| time.intersects(date, actor_time))
     };
 
     match job {
@@ -964,11 +968,7 @@ fn format_job_time_window_details(job: &Job, actor_time: &TimeWindow, date: Floa
 
     format!(
         "actor_time=[{:.3},{:.3}], job_tw_count={tw_count}, job_tw_range=[{:.3},{:.3}], date={:.3}",
-        actor_time.start,
-        actor_time.end,
-        min_start,
-        max_end,
-        date
+        actor_time.start, actor_time.end, min_start, max_end, date
     )
 }
 
@@ -979,21 +979,18 @@ fn format_job_skills_details(job_skills: &JobSkills, vehicle_skills: Option<&Has
     let missing_all = job_skills
         .all_of
         .as_ref()
-        .map(|skills| {
-            skills.iter().filter(|skill| !vehicle_skills.contains(*skill)).cloned().collect::<Vec<_>>()
-        })
+        .map(|skills| skills.iter().filter(|skill| !vehicle_skills.contains(*skill)).cloned().collect::<Vec<_>>())
         .unwrap_or_default();
 
-    let has_one_of = job_skills.one_of.as_ref().map_or(true, |skills| {
-        skills.is_empty() || skills.iter().any(|skill| vehicle_skills.contains(skill))
-    });
+    let has_one_of = job_skills
+        .one_of
+        .as_ref()
+        .map_or(true, |skills| skills.is_empty() || skills.iter().any(|skill| vehicle_skills.contains(skill)));
 
     let conflicting_none = job_skills
         .none_of
         .as_ref()
-        .map(|skills| {
-            skills.iter().filter(|skill| vehicle_skills.contains(*skill)).cloned().collect::<Vec<_>>()
-        })
+        .map(|skills| skills.iter().filter(|skill| vehicle_skills.contains(*skill)).cloned().collect::<Vec<_>>())
         .unwrap_or_default();
 
     let missing_all_sample = format_skill_sample(&missing_all);
@@ -1013,11 +1010,7 @@ fn format_skill_sample(skills: &[String]) -> String {
     }
 
     let sample = skills.iter().take(3).cloned().collect::<Vec<_>>().join(",");
-    if skills.len() > 3 {
-        format!("{}(+{})", sample, skills.len() - 3)
-    } else {
-        sample
-    }
+    if skills.len() > 3 { format!("{}(+{})", sample, skills.len() - 3) } else { sample }
 }
 
 fn check_all_of(job_skills: &JobSkills, vehicle_skills: &Option<&HashSet<String>>) -> bool {
@@ -1102,7 +1095,11 @@ fn try_insert_conditional_jobs(insertion_ctx: &mut InsertionContext) {
     repair_conditional_jobs(insertion_ctx);
 }
 
-fn get_route_cost(route_ctx: &RouteContext, activity: &dyn ActivityCost, transport: &dyn TransportCost) -> Option<Cost> {
+fn get_route_cost(
+    route_ctx: &RouteContext,
+    activity: &dyn ActivityCost,
+    transport: &dyn TransportCost,
+) -> Option<Cost> {
     let route = route_ctx.route();
     let mut total = Cost::default();
 
@@ -1154,10 +1151,7 @@ fn has_pending_breaks_for_used_vehicles(insertion_ctx: &InsertionContext) -> boo
 
     let is_pending_used_break = |job: &Job| {
         job.dimens().get_job_id().is_some_and(|job_id| job_id.contains("_break_"))
-            && job
-                .dimens()
-                .get_vehicle_id()
-                .is_some_and(|vehicle_id| used_vehicle_ids.contains(vehicle_id))
+            && job.dimens().get_vehicle_id().is_some_and(|vehicle_id| used_vehicle_ids.contains(vehicle_id))
     };
 
     insertion_ctx.solution.required.iter().any(is_pending_used_break)

@@ -183,11 +183,7 @@ fn get_problem_blocks(
     // TODO pass environment from outside to allow parametrization
     let environment = Environment::default();
 
-    let skill_index = if problem_props.has_skills {
-        SkillIndex::new(api_problem)
-    } else {
-        None
-    };
+    let skill_index = if problem_props.has_skills { SkillIndex::new(api_problem) } else { None };
     if let Some(skill_index) = skill_index.as_ref() {
         let (skills, bits) = skill_index.stats();
         (environment.logger)(format!("skills: bitset enabled; skills={skills}, bits={bits}").as_str());
@@ -216,21 +212,20 @@ fn get_problem_blocks(
 
     let size = transport.size();
     let actors_len = fleet.actors.len();
-    let bytes = actors_len
-        .saturating_mul(size)
-        .saturating_mul(size)
-        .saturating_mul(std::mem::size_of::<Cost>());
+    let bytes = actors_len.saturating_mul(size).saturating_mul(size).saturating_mul(std::mem::size_of::<Cost>());
 
     let transport_impl = if reserved_times_index.is_empty() {
         "PrecomputedActorCostTransportCost (no reserved time)"
     } else {
         "PrecomputedActorCostTransportCost + DynamicActivityCost (reserved time)"
     };
-    (environment.logger)(format!(
-        "using transport cost: {transport_impl}; actors={actors_len}, locations={size}, base_costs≈{} MB",
-        bytes as f64 / (1024.0 * 1024.0)
-    )
-    .as_str());
+    (environment.logger)(
+        format!(
+            "using transport cost: {transport_impl}; actors={actors_len}, locations={size}, base_costs≈{} MB",
+            bytes as f64 / (1024.0 * 1024.0)
+        )
+        .as_str(),
+    );
 
     let precomputed_transport = PrecomputedActorCostTransportCost::new(
         reserved_times_index.clone(),
@@ -238,13 +233,13 @@ fn get_problem_blocks(
         fleet.actors.clone(),
         is_time_agnostic,
     )
-            .map_err(|err| {
-                vec![FormatError::new(
-                    "E0002".to_string(),
-                    "cannot create transport costs".to_string(),
-                    format!("check fleet definition: '{err}'"),
-                )]
-            })?;
+    .map_err(|err| {
+        vec![FormatError::new(
+            "E0002".to_string(),
+            "cannot create transport costs".to_string(),
+            format!("check fleet definition: '{err}'"),
+        )]
+    })?;
     let stats = precomputed_transport.stats();
     (environment.logger)(format!(
         "transport precompute: profiles={}, locations={}, durations≈{} MB, distances≈{} MB, base_costs≈{} MB, use_precomputed={}",

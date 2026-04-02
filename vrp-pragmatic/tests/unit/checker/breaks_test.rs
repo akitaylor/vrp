@@ -67,7 +67,11 @@ can_check_breaks! {
 fn can_match_break_once_when_it_is_between_two_activities_in_same_stop() {
     let problem = Problem {
         plan: Plan {
-            jobs: vec![create_delivery_job("job1", (1., 0.)), create_pickup_job("job2", (2., 0.)), create_pickup_job("job3", (2., 0.))],
+            jobs: vec![
+                create_delivery_job("job1", (1., 0.)),
+                create_pickup_job("job2", (2., 0.)),
+                create_pickup_job("job3", (2., 0.)),
+            ],
             ..create_empty_plan()
         },
         fleet: Fleet {

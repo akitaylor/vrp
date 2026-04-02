@@ -80,7 +80,11 @@ fn check_routing_rules(context: &CheckerContext) -> GenericResult<()> {
                         (break_end + remaining_duration, distance, to.distance)
                     }
                     (Stop::Transit(_), Stop::Transit(_)) => {
-                        return Err(format!("two consecutive transit stops are not supported in tour '{}'", tour.vehicle_id).into())
+                        return Err(format!(
+                            "two consecutive transit stops are not supported in tour '{}'",
+                            tour.vehicle_id
+                        )
+                        .into());
                     }
                 };
 

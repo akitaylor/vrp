@@ -593,7 +593,11 @@ mod dynamic {
                 "variable_decompose_search".to_string(),
                 2.,
             ),
-            (wrap(create_composite_decompose_search(problem, environment)), "composite_decompose_search".to_string(), 2.),
+            (
+                wrap(create_composite_decompose_search(problem, environment)),
+                "composite_decompose_search".to_string(),
+                2.,
+            ),
         ]
     }
 

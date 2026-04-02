@@ -49,10 +49,7 @@ struct ReservedTimesEntry {
     max_end: Timestamp,
 }
 
-fn get_reserved_time_window(
-    schedule: &TimeWindow,
-    reserved_time: &ReservedTimeWindow,
-) -> Option<TimeWindow> {
+fn get_reserved_time_window(schedule: &TimeWindow, reserved_time: &ReservedTimeWindow) -> Option<TimeWindow> {
     let reserved_start = reserved_time.time.start;
     let reserved_end = reserved_time.time.end;
     let actual_start = schedule.start.clamp(reserved_start, reserved_end);
@@ -83,7 +80,8 @@ fn resolve_reserved_time_window(route: &Route, reserved_time: ReservedTimeWindow
         .map(|schedule| schedule.end.min(reserved_time.time.end))
         .max_by(|left, right| left.total_cmp(right));
 
-    latest_start.map(|start| ReservedTimeWindow { time: TimeWindow::new(start, start), duration: reserved_time.duration })
+    latest_start
+        .map(|start| ReservedTimeWindow { time: TimeWindow::new(start, start), duration: reserved_time.duration })
 }
 
 /// Provides way to calculate activity costs which might contain reserved time.
@@ -110,7 +108,8 @@ impl ActivityCost for DynamicActivityCost {
         let schedule = TimeWindow::new(arrival, departure);
 
         (self.reserved_times_fn)(route, &schedule).map_or(ControlFlow::Continue(departure), |reserved_time| {
-            let reserved_tw = get_reserved_time_window(&schedule, &reserved_time).expect("reserved time must intersect");
+            let reserved_tw =
+                get_reserved_time_window(&schedule, &reserved_time).expect("reserved time must intersect");
 
             let activity_tw = &activity.place.time;
 
@@ -332,12 +331,7 @@ impl PrecomputedActorCostTransportCost {
         }
     }
 
-    fn get_reserved_extra_duration(
-        &self,
-        route: &Route,
-        travel_time: TravelTime,
-        base_duration: Duration,
-    ) -> Duration {
+    fn get_reserved_extra_duration(&self, route: &Route, travel_time: TravelTime, base_duration: Duration) -> Duration {
         let time_window = match travel_time {
             TravelTime::Arrival(arrival) => TimeWindow::new(arrival - base_duration, arrival),
             TravelTime::Departure(departure) => TimeWindow::new(departure, departure + base_duration),
@@ -365,7 +359,8 @@ impl TransportCost for PrecomputedActorCostTransportCost {
     }
 
     fn duration_approx(&self, profile: &Profile, from: Location, to: Location) -> Duration {
-        self.get_precomputed_duration(profile, from, to).unwrap_or_else(|| self.inner.duration_approx(profile, from, to))
+        self.get_precomputed_duration(profile, from, to)
+            .unwrap_or_else(|| self.inner.duration_approx(profile, from, to))
     }
 
     fn distance_approx(&self, profile: &Profile, from: Location, to: Location) -> Distance {
@@ -476,16 +471,14 @@ pub(crate) fn create_reserved_times_fn(
 
             if has_no_intersections {
                 let intervals = times;
-                let (min_start, max_end) = intervals.iter().fold(
-                    (Timestamp::MAX, Timestamp::MIN),
-                    |(min_start, max_end), reserved_time| {
+                let (min_start, max_end) =
+                    intervals.iter().fold((Timestamp::MAX, Timestamp::MIN), |(min_start, max_end), reserved_time| {
                         let (start, end) = match &reserved_time.time {
                             TimeSpan::Window(time) => (time.start, time.end),
                             TimeSpan::Offset(time) => (time.start, time.end),
                         };
                         (min_start.min(start), max_end.max(end + reserved_time.duration))
-                    },
-                );
+                    });
                 acc.insert(actor, ReservedTimesEntry { intervals, min_start, max_end });
 
                 Ok(acc)

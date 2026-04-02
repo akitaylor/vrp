@@ -278,10 +278,7 @@ fn can_recalculate_reload_intervals_after_trivial_reload_removal() {
         .collect::<Vec<_>>();
 
     assert_eq!(job_ids, vec!["d1", "d2"]);
-    assert_eq!(
-        route_ctx.state().get_reload_intervals().cloned(),
-        Some(vec![(0, route_ctx.route().tour.total() - 1)])
-    );
+    assert_eq!(route_ctx.state().get_reload_intervals().cloned(), Some(vec![(0, route_ctx.route().tour.total() - 1)]));
 }
 
 // shared reload
