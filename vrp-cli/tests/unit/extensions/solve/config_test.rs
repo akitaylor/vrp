@@ -38,6 +38,11 @@ fn can_read_full_config() {
             distribution_factor,
             rebalance_memory,
             exploration_ratio,
+            adaptive_selection: _,
+            min_selection_size: _,
+            min_exploration_generations: _,
+            min_exploration_time_secs: _,
+            min_exploration_ratio: _,
         } => {
             assert_eq!(selection_size, Some(8));
             assert_eq!(max_elite_size, Some(2));
@@ -129,6 +134,7 @@ fn can_create_default_config() {
     assert!(config.hyper.is_none());
     assert!(config.termination.is_none());
     assert!(config.telemetry.is_none());
+    assert!(config.scarce_jobs.is_none());
 }
 
 #[test]
@@ -143,6 +149,8 @@ fn can_configure_telemetry_metrics() {
             metrics: Some(MetricsConfig { enabled: true, track_population: Some(10) }),
         }),
         output: None,
+        vehicle_allocation: None,
+        scarce_jobs: None,
     };
 
     let solution = create_builder_from_config(create_example_problem(), Vec::default(), &config)
@@ -154,6 +162,21 @@ fn can_configure_telemetry_metrics() {
     let metrics = solution.telemetry.expect("no metrics");
     assert_eq!(metrics.generations, 100);
     assert_eq!(metrics.evolution.len(), 10 + 1);
+}
+
+#[test]
+fn can_read_scarce_jobs_config() {
+    let config = read_config(BufReader::new(
+        r#"{"scarceJobs":{"enabled":true,"maxCompatibleVehicles":2,"lockCompatibleVehicles":1,"log":true}}"#
+            .as_bytes(),
+    ))
+    .unwrap();
+
+    let scarce_jobs = config.scarce_jobs.expect("no scarce jobs config");
+    assert_eq!(scarce_jobs.enabled, Some(true));
+    assert_eq!(scarce_jobs.max_compatible_vehicles, Some(2));
+    assert_eq!(scarce_jobs.lock_compatible_vehicles, Some(1));
+    assert_eq!(scarce_jobs.log, Some(true));
 }
 
 fn as_scalar_probability(probability: &OperatorProbabilityType) -> Float {

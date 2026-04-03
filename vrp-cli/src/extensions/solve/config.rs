@@ -28,6 +28,7 @@ use vrp_core::solver::processing::{
     VehicleAllocationSettings,
     VehicleAllocationSettingsExtraProperty,
 };
+use vrp_core::solver::search::{RecreateWithScarceJobs, ScarceJobsSettings, ScarceJobsSettingsExtraProperty};
 
 /// An algorithm configuration.
 #[derive(Clone, Default, Deserialize, Debug)]
@@ -47,6 +48,9 @@ pub struct Config {
     /// Specifies optional vehicle allocation post-processing.
     #[serde(rename = "vehicleAllocation")]
     pub vehicle_allocation: Option<VehicleAllocationConfig>,
+    /// Specifies optional scarce job handling.
+    #[serde(rename = "scarceJobs")]
+    pub scarce_jobs: Option<ScarceJobsConfig>,
 }
 
 /// An evolution configuration.
@@ -460,6 +464,9 @@ const VEHICLE_ALLOCATION_DEFAULT_APPLY_IN_SEARCH: bool = true;
 const VEHICLE_ALLOCATION_DEFAULT_SEARCH_INTERVAL: usize = 1000;
 const VEHICLE_ALLOCATION_DEFAULT_SEARCH_TOP_K: usize = 0;
 const VEHICLE_ALLOCATION_DEFAULT_SEARCH_SAMPLES: usize = 0;
+const SCARCE_JOBS_DEFAULT_MAX_COMPATIBLE_VEHICLES: usize = 2;
+const SCARCE_JOBS_DEFAULT_LOCK_COMPATIBLE_VEHICLES: usize = 1;
+const SCARCE_JOBS_DEFAULT_LOG: bool = false;
 
 /// Specifies optional vehicle allocation post-processing.
 #[derive(Clone, Deserialize, Debug, Default)]
@@ -485,6 +492,20 @@ pub struct VehicleAllocationConfig {
     pub search_samples: Option<usize>,
 }
 
+/// Specifies optional scarce job handling.
+#[derive(Clone, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScarceJobsConfig {
+    /// Enables scarce job handling.
+    pub enabled: Option<bool>,
+    /// Jobs with compatible vehicle count up to this threshold are inserted first. Default is 2.
+    pub max_compatible_vehicles: Option<usize>,
+    /// Jobs with compatible vehicle count up to this threshold are locked after assignment. Default is 1.
+    pub lock_compatible_vehicles: Option<usize>,
+    /// Enables logging. Default is false.
+    pub log: Option<bool>,
+}
+
 fn configure_from_evolution(
     mut builder: ProblemConfigBuilder,
     problem: Arc<Problem>,
@@ -497,13 +518,13 @@ fn configure_from_evolution(
             builder = builder.with_initial(
                 initial.alternatives.max_size,
                 initial.alternatives.quota,
-                std::iter::once(create_recreate_method(&initial.method, environment.clone()))
+                std::iter::once(create_recreate_method(problem.clone(), &initial.method, environment.clone()))
                     .chain(
                         initial
                             .alternatives
                             .methods
                             .iter()
-                            .map(|method| create_recreate_method(method, environment.clone())),
+                            .map(|method| create_recreate_method(problem.clone(), method, environment.clone())),
                     )
                     .map::<(
                         Box<
@@ -683,6 +704,52 @@ fn apply_vehicle_allocation_settings(
     });
 }
 
+fn apply_scarce_jobs_settings(
+    problem: &mut Arc<Problem>,
+    scarce_jobs: &Option<ScarceJobsConfig>,
+    logger: &InfoLogger,
+) {
+    let Some(config) = scarce_jobs else {
+        (logger)("scarce jobs: disabled (no config)");
+        return;
+    };
+
+    let enabled = config.enabled.unwrap_or(true);
+    let max_compatible_vehicles =
+        config.max_compatible_vehicles.unwrap_or(SCARCE_JOBS_DEFAULT_MAX_COMPATIBLE_VEHICLES);
+    let lock_compatible_vehicles = config
+        .lock_compatible_vehicles
+        .unwrap_or(SCARCE_JOBS_DEFAULT_LOCK_COMPATIBLE_VEHICLES)
+        .min(max_compatible_vehicles);
+    let log = config.log.unwrap_or(SCARCE_JOBS_DEFAULT_LOG);
+
+    (logger)(
+        format!(
+            "scarce jobs: enabled={enabled}, max_compatible_vehicles={max_compatible_vehicles}, lock_compatible_vehicles={lock_compatible_vehicles}, log={log}"
+        )
+        .as_str(),
+    );
+
+    if !enabled || max_compatible_vehicles == 0 {
+        return;
+    }
+
+    let settings = ScarceJobsSettings { max_compatible_vehicles, lock_compatible_vehicles, log };
+    let problem_ref = problem.as_ref();
+    let mut extras = problem_ref.extras.as_ref().clone();
+    extras.set_scarce_jobs_settings(Arc::new(settings));
+
+    *problem = Arc::new(Problem {
+        fleet: problem_ref.fleet.clone(),
+        jobs: problem_ref.jobs.clone(),
+        locks: problem_ref.locks.clone(),
+        goal: problem_ref.goal.clone(),
+        activity: problem_ref.activity.clone(),
+        transport: problem_ref.transport.clone(),
+        extras: Arc::new(extras),
+    });
+}
+
 fn configure_from_hyper(
     mut builder: ProblemConfigBuilder,
     problem: Arc<Problem>,
@@ -728,9 +795,13 @@ fn configure_from_termination(
     builder
 }
 
-fn create_recreate_method(method: &RecreateMethod, environment: Arc<Environment>) -> (Arc<dyn Recreate>, usize) {
+fn create_recreate_method(
+    problem: Arc<Problem>,
+    method: &RecreateMethod,
+    environment: Arc<Environment>,
+) -> (Arc<dyn Recreate>, usize) {
     let random = environment.random.clone();
-    match method {
+    let (recreate, weight): (Arc<dyn Recreate>, usize) = match method {
         RecreateMethod::Cheapest { weight } => (Arc::new(RecreateWithCheapest::new(random)), *weight),
         RecreateMethod::Farthest { weight } => (Arc::new(RecreateWithFarthest::new(random)), *weight),
         RecreateMethod::SkipBest { weight, start, end } => {
@@ -748,7 +819,14 @@ fn create_recreate_method(method: &RecreateMethod, environment: Arc<Environment>
             let noise = Noise::new_with_addition(*probability, (*min, *max), random.clone());
             (Arc::new(RecreateWithPerturbation::new(noise, random.clone())), *weight)
         }
-    }
+    };
+    let recreate = problem
+        .extras
+        .get_scarce_jobs_settings()
+        .map(|settings| Arc::new(RecreateWithScarceJobs::new(recreate.clone(), settings)) as Arc<dyn Recreate>)
+        .unwrap_or(recreate);
+
+    (recreate, weight)
 }
 
 fn create_operator(
@@ -762,7 +840,7 @@ fn create_operator(
 
             let ruin = Arc::new(WeightedRuin::new(ruins));
             let recreate = Arc::new(WeightedRecreate::new(
-                recreates.iter().map(|r| create_recreate_method(r, environment.clone())).collect(),
+                recreates.iter().map(|r| create_recreate_method(problem.clone(), r, environment.clone())).collect(),
             ));
             (
                 Arc::new(RuinAndRecreate::new(ruin, recreate)),
@@ -987,6 +1065,7 @@ pub fn create_builder_from_config(
     let telemetry_mode = get_telemetry_mode(environment.clone(), &config.telemetry);
 
     apply_vehicle_allocation_settings(&mut problem, &config.vehicle_allocation, &environment.logger);
+    apply_scarce_jobs_settings(&mut problem, &config.scarce_jobs, &environment.logger);
     let mut builder = VrpConfigBuilder::new(problem.clone())
         .set_environment(environment.clone())
         .set_telemetry_mode(telemetry_mode.clone())
