@@ -48,6 +48,7 @@ struct ReservedTimesEntry {
     intervals: ReservedTimesIntervals,
     min_start: Timestamp,
     max_end: Timestamp,
+    is_offset: bool,
 }
 
 enum ReservedTimesIntervals {
@@ -209,7 +210,7 @@ impl TransportCost for DynamicTransportCost {
 pub struct PrecomputedActorCostTransportCost {
     reserved_times_fn: ReservedTimesFn,
     inner: Arc<dyn TransportCost>,
-    actor_index: FxHashMap<Arc<Actor>, usize>,
+    actor_index: FxHashMap<usize, usize>,
     base_costs: Vec<Vec<Cost>>,
     durations: Vec<Vec<Duration>>,
     distances: Vec<Vec<Distance>>,
@@ -266,7 +267,7 @@ impl PrecomputedActorCostTransportCost {
         let mut base_costs = Vec::with_capacity(actors.len());
 
         for (idx, actor) in actors.into_iter().enumerate() {
-            actor_index.insert(actor.clone(), idx);
+            actor_index.insert(get_actor_key(&actor), idx);
 
             let rate_distance = actor.driver.costs.per_distance + actor.vehicle.costs.per_distance;
             let rate_time = actor.driver.costs.per_driving_time + actor.vehicle.costs.per_driving_time;
@@ -298,9 +299,10 @@ impl PrecomputedActorCostTransportCost {
 
     fn get_base_cost(&self, route: &Route, from: Location, to: Location) -> Cost {
         let matrix_idx = from * self.size + to;
+        let actor_key = get_actor_key(&route.actor);
 
         self.actor_index
-            .get(&route.actor)
+            .get(&actor_key)
             .and_then(|idx| self.base_costs.get(*idx))
             .and_then(|costs| costs.get(matrix_idx))
             .copied()
@@ -486,11 +488,14 @@ pub(crate) fn create_reserved_times_fn(
                         };
                         (min_start.min(start), max_end.max(end + reserved_time.duration))
                     });
+                let is_offset = times
+                    .first()
+                    .is_some_and(|reserved_time| matches!(reserved_time.time, TimeSpan::Offset(_)));
                 let intervals = match times.len() {
                     1 => ReservedTimesIntervals::Single(times.pop().unwrap()),
                     _ => ReservedTimesIntervals::Multiple(times),
                 };
-                acc.insert(actor, ReservedTimesEntry { intervals, min_start, max_end });
+                acc.insert(get_actor_key(&actor), ReservedTimesEntry { intervals, min_start, max_end, is_offset });
 
                 Ok(acc)
             } else {
@@ -500,18 +505,15 @@ pub(crate) fn create_reserved_times_fn(
     )?;
 
     Ok(Arc::new(move |route: &Route, time_window: &TimeWindow| {
-        reserved_times.get(&route.actor).and_then(|entry| {
+        reserved_times.get(&get_actor_key(&route.actor)).and_then(|entry| {
             let offset = route.tour.start().map(|a| a.schedule.departure).unwrap_or(0.);
 
             // NOTE map external absolute time window to time span's start/end
-            let is_offset = match &entry.intervals {
-                ReservedTimesIntervals::Single(interval) => matches!(interval.time, TimeSpan::Offset(_)),
-                ReservedTimesIntervals::Multiple(intervals) => {
-                    matches!(intervals.first().expect("intervals are not empty").time, TimeSpan::Offset(_))
-                }
+            let (interval_start, interval_end) = if entry.is_offset {
+                (time_window.start - offset, time_window.end - offset)
+            } else {
+                (time_window.start, time_window.end)
             };
-            let (interval_start, interval_end) =
-                if is_offset { (time_window.start - offset, time_window.end - offset) } else { (time_window.start, time_window.end) };
             if interval_end <= entry.min_start || interval_start >= entry.max_end {
                 return None;
             }
@@ -524,9 +526,18 @@ pub(crate) fn create_reserved_times_fn(
             };
 
             match &entry.intervals {
-                ReservedTimesIntervals::Single(interval) => check_reserved_time(interval),
+                ReservedTimesIntervals::Single(interval) => {
+                    let reserved_time = interval.to_reserved_time_window(offset);
+                    let reserved_time = resolve_reserved_time_window(route, reserved_time)?;
+                    get_reserved_time_window(time_window, &reserved_time).map(|_| reserved_time)
+                }
                 ReservedTimesIntervals::Multiple(intervals) => intervals.iter().find_map(check_reserved_time),
             }
         })
     }))
+}
+
+#[inline]
+fn get_actor_key(actor: &Arc<Actor>) -> usize {
+    Arc::as_ptr(actor) as usize
 }

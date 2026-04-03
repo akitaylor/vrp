@@ -293,16 +293,13 @@ fn has_demand_violation<T: LoadOps>(
     demand: Option<&Demand<T>>,
     stopped: bool,
 ) -> Option<bool> {
-    let capacity: Option<&T> = route_ctx.route().actor.vehicle.dimens.get_vehicle_capacity();
     let demand = demand?;
-
-    let capacity = if let Some(capacity) = capacity {
-        capacity
-    } else {
-        return Some(stopped);
-    };
+    let capacity = route_ctx.route().actor.vehicle.dimens.get_vehicle_capacity::<T>()?;
+    let change = demand.change();
 
     let state = route_ctx.state();
+    let future = (demand.pickup.0.is_not_empty() || change.is_not_empty())
+        .then(|| state.get_max_future_capacity_at(pivot_idx).copied().unwrap_or_default());
 
     // check how static delivery affects a past max load
     if demand.delivery.0.is_not_empty() {
@@ -314,16 +311,15 @@ fn has_demand_violation<T: LoadOps>(
 
     // check how static pickup affect future max load
     if demand.pickup.0.is_not_empty() {
-        let future: T = state.get_max_future_capacity_at(pivot_idx).copied().unwrap_or_default();
+        let future: T = future.clone().unwrap_or_default();
         if !capacity.can_fit(&(future + demand.pickup.0)) {
             return Some(false);
         }
     }
 
     // check dynamic load change
-    let change = demand.change();
     if change.is_not_empty() {
-        let future: T = state.get_max_future_capacity_at(pivot_idx).copied().unwrap_or_default();
+        let future: T = future.unwrap_or_default();
         if !capacity.can_fit(&(future + change)) {
             return Some(false);
         }
