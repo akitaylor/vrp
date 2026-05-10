@@ -111,6 +111,7 @@ impl HeuristicSolutionProcessing for VicinityClustering {
                 let cluster_activity = route_ctx.route().tour.get(activity_idx).unwrap();
                 let cluster_time = cluster_activity.place.time.clone();
                 let cluster_arrival = cluster_activity.schedule.arrival;
+                let cluster_departure = cluster_activity.schedule.departure;
                 let last_job = cluster.last().unwrap().job.clone();
 
                 let (_, activities) =
@@ -146,9 +147,21 @@ impl HeuristicSolutionProcessing for VicinityClustering {
                     });
 
                 route_ctx.route_mut().tour.remove_activity_at(activity_idx);
+                let departure_delta =
+                    activities.last().map_or(0., |activity| activity.schedule.departure - cluster_departure);
+                let activities_len = activities.len();
+
                 activities.into_iter().enumerate().for_each(|(seq_idx, activity)| {
                     route_ctx.route_mut().tour.insert_at(activity, activity_idx + seq_idx);
                 });
+
+                if departure_delta.abs() > f64::EPSILON {
+                    (activity_idx + activities_len..route_ctx.route().tour.total()).for_each(|idx| {
+                        let activity = route_ctx.route_mut().tour.get_mut(idx).unwrap();
+                        activity.schedule.arrival += departure_delta;
+                        activity.schedule.departure += departure_delta;
+                    });
+                }
             });
         });
 

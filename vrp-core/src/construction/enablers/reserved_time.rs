@@ -6,11 +6,11 @@ use crate::models::common::*;
 use crate::models::problem::{ActivityCost, Actor, TransportCost, TravelTime};
 use crate::models::solution::{Activity, Route};
 use rosomaxa::prelude::GenericError;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::mem;
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use rustc_hash::FxHashMap;
 
 /// Represent a reserved time span entity.
 #[derive(Clone, Debug)]
@@ -250,12 +250,13 @@ impl PrecomputedActorCostTransportCost {
         for actor in actors.iter() {
             let profile = &actor.vehicle.profile;
             if !durations.get(profile.index).is_some_and(|data| !data.is_empty()) {
+                let unscaled_profile = Profile::new(profile.index, Some(1.));
                 let mut profile_durations = Vec::with_capacity(size * size);
                 let mut profile_distances = Vec::with_capacity(size * size);
                 for from in 0..size {
                     for to in 0..size {
-                        profile_durations.push(inner.duration_approx(profile, from, to));
-                        profile_distances.push(inner.distance_approx(profile, from, to));
+                        profile_durations.push(inner.duration_approx(&unscaled_profile, from, to));
+                        profile_distances.push(inner.distance_approx(&unscaled_profile, from, to));
                     }
                 }
                 durations[profile.index] = profile_durations;
@@ -279,7 +280,10 @@ impl PrecomputedActorCostTransportCost {
             {
                 if !profile_distances.is_empty() && !profile_durations.is_empty() {
                     for idx in 0..profile_distances.len() {
-                        costs.push(profile_distances[idx] * rate_distance + profile_durations[idx] * rate_time);
+                        costs.push(
+                            profile_distances[idx] * rate_distance
+                                + profile_durations[idx] * actor.vehicle.profile.scale * rate_time,
+                        );
                     }
                 } else {
                     for from in 0..size {
@@ -314,7 +318,7 @@ impl PrecomputedActorCostTransportCost {
             .get(profile.index)
             .filter(|data| !data.is_empty())
             .and_then(|durations| durations.get(from * self.size + to))
-            .copied()
+            .map(|duration| duration * profile.scale)
     }
 
     fn get_precomputed_distance(&self, profile: &Profile, from: Location, to: Location) -> Option<Distance> {
@@ -488,9 +492,8 @@ pub(crate) fn create_reserved_times_fn(
                         };
                         (min_start.min(start), max_end.max(end + reserved_time.duration))
                     });
-                let is_offset = times
-                    .first()
-                    .is_some_and(|reserved_time| matches!(reserved_time.time, TimeSpan::Offset(_)));
+                let is_offset =
+                    times.first().is_some_and(|reserved_time| matches!(reserved_time.time, TimeSpan::Offset(_)));
                 let intervals = match times.len() {
                     1 => ReservedTimesIntervals::Single(times.pop().unwrap()),
                     _ => ReservedTimesIntervals::Multiple(times),

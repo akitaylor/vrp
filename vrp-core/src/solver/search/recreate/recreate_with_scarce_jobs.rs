@@ -118,10 +118,8 @@ fn collect_scarce_jobs(
             let compatible_vehicle_ids = get_compatible_vehicle_ids(insertion_ctx, job);
             let compatible_count = compatible_vehicle_ids.len();
 
-            (compatible_count > 0 && compatible_count <= max_compatible_vehicles).then_some((
-                job.clone(),
-                compatible_vehicle_ids,
-            ))
+            (compatible_count > 0 && compatible_count <= max_compatible_vehicles)
+                .then_some((job.clone(), compatible_vehicle_ids))
         })
         .collect()
 }
@@ -143,10 +141,7 @@ fn find_best_result(
     compatible_vehicle_ids: &HashSet<String>,
 ) -> InsertionResult {
     let is_compatible_actor = |actor: &Actor| {
-        actor.vehicle
-            .dimens
-            .get_vehicle_id()
-            .is_some_and(|vehicle_id| compatible_vehicle_ids.contains(vehicle_id))
+        actor.vehicle.dimens.get_vehicle_id().is_some_and(|vehicle_id| compatible_vehicle_ids.contains(vehicle_id))
     };
 
     let available_routes = insertion_ctx
@@ -174,10 +169,7 @@ fn find_best_result(
 }
 
 fn compare_jobs(left: &(Job, HashSet<String>), right: &(Job, HashSet<String>)) -> Ordering {
-    left.1
-        .len()
-        .cmp(&right.1.len())
-        .then_with(|| get_job_id(&left.0).cmp(&get_job_id(&right.0)))
+    left.1.len().cmp(&right.1.len()).then_with(|| get_job_id(&left.0).cmp(&get_job_id(&right.0)))
 }
 
 fn get_job_id(job: &Job) -> String {

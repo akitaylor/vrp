@@ -8,10 +8,10 @@ mod config_test;
 
 extern crate serde_json;
 
+use crate::extensions::solve::interrupt::create_interruption_quota;
 use serde::Deserialize;
 use std::io::{BufReader, Read};
 use std::sync::Arc;
-use crate::extensions::solve::interrupt::create_interruption_quota;
 use vrp_core::construction::heuristics::InsertionContext;
 use vrp_core::models::GoalContext;
 use vrp_core::models::common::Footprint;
@@ -21,14 +21,12 @@ use vrp_core::rosomaxa::get_default_selection_size;
 use vrp_core::rosomaxa::prelude::*;
 use vrp_core::rosomaxa::utils::*;
 use vrp_core::solver::RecreateInitialOperator;
-use vrp_core::solver::search::*;
-use vrp_core::solver::*;
 use vrp_core::solver::processing::{
-    VehicleAllocation,
-    VehicleAllocationSettings,
-    VehicleAllocationSettingsExtraProperty,
+    VehicleAllocation, VehicleAllocationSettings, VehicleAllocationSettingsExtraProperty,
 };
+use vrp_core::solver::search::*;
 use vrp_core::solver::search::{RecreateWithScarceJobs, ScarceJobsSettings, ScarceJobsSettingsExtraProperty};
+use vrp_core::solver::*;
 
 /// An algorithm configuration.
 #[derive(Clone, Default, Deserialize, Debug)]
@@ -346,6 +344,18 @@ pub enum LocalOperatorType {
 
     #[serde(rename(deserialize = "sequence"))]
     Sequence { weight: usize },
+
+    #[serde(rename(deserialize = "cluster-relocate"))]
+    #[serde(rename_all = "camelCase")]
+    ClusterRelocate {
+        weight: usize,
+        route_neighbors: Option<usize>,
+        job_candidates: Option<usize>,
+        max_evictions: Option<usize>,
+        neighbor_radius: Option<usize>,
+        min_shared_neighbors: Option<usize>,
+        allow_unassigned: Option<bool>,
+    },
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -638,12 +648,7 @@ fn configure_from_processing(
     let log = config.log.unwrap_or(VEHICLE_ALLOCATION_DEFAULT_LOG);
 
     let mut processing = create_default_processing();
-    processing.solution.push(Box::new(VehicleAllocation::new(
-        max_iterations,
-        allow_unused,
-        allow_swaps,
-        log,
-    )));
+    processing.solution.push(Box::new(VehicleAllocation::new(max_iterations, allow_unused, allow_swaps, log)));
 
     builder.with_processing(processing)
 }
@@ -704,19 +709,14 @@ fn apply_vehicle_allocation_settings(
     });
 }
 
-fn apply_scarce_jobs_settings(
-    problem: &mut Arc<Problem>,
-    scarce_jobs: &Option<ScarceJobsConfig>,
-    logger: &InfoLogger,
-) {
+fn apply_scarce_jobs_settings(problem: &mut Arc<Problem>, scarce_jobs: &Option<ScarceJobsConfig>, logger: &InfoLogger) {
     let Some(config) = scarce_jobs else {
         (logger)("scarce jobs: disabled (no config)");
         return;
     };
 
     let enabled = config.enabled.unwrap_or(true);
-    let max_compatible_vehicles =
-        config.max_compatible_vehicles.unwrap_or(SCARCE_JOBS_DEFAULT_MAX_COMPATIBLE_VEHICLES);
+    let max_compatible_vehicles = config.max_compatible_vehicles.unwrap_or(SCARCE_JOBS_DEFAULT_MAX_COMPATIBLE_VEHICLES);
     let lock_compatible_vehicles = config
         .lock_compatible_vehicles
         .unwrap_or(SCARCE_JOBS_DEFAULT_LOCK_COMPATIBLE_VEHICLES)
@@ -946,6 +946,27 @@ fn create_local_search(
                 (Arc::new(ExchangeIntraRouteRandom::new(noise.probability, noise.min, noise.max)), *weight)
             }
             LocalOperatorType::Sequence { weight } => (Arc::new(ExchangeSequence::default()), *weight),
+            LocalOperatorType::ClusterRelocate {
+                weight,
+                route_neighbors,
+                job_candidates,
+                max_evictions,
+                neighbor_radius,
+                min_shared_neighbors,
+                allow_unassigned,
+            } => {
+                let defaults = ClusterRelocateConfig::default();
+                let config = ClusterRelocateConfig {
+                    route_neighbors: route_neighbors.unwrap_or(defaults.route_neighbors),
+                    job_candidates: job_candidates.unwrap_or(defaults.job_candidates),
+                    max_evictions: max_evictions.unwrap_or(defaults.max_evictions),
+                    neighbor_radius: neighbor_radius.unwrap_or(defaults.neighbor_radius),
+                    min_shared_neighbors: min_shared_neighbors.unwrap_or(defaults.min_shared_neighbors),
+                    allow_unassigned: allow_unassigned.unwrap_or(defaults.allow_unassigned),
+                };
+
+                (Arc::new(ClusterRelocate::new(config)), *weight)
+            }
         })
         .collect::<Vec<_>>();
 
@@ -1005,13 +1026,7 @@ fn configure_from_environment(
     };
 
     let quota = Some(create_interruption_quota(max_time, logger.clone()));
-    let mut environment = Environment::new(
-        create_random(is_repeatable),
-        quota,
-        Parallelism::default(),
-        logger,
-        false,
-    );
+    let mut environment = Environment::new(create_random(is_repeatable), quota, Parallelism::default(), logger, false);
 
     if let Some(parallelism) = environment_config.as_ref().and_then(|c| c.parallelism.as_ref()) {
         // TODO validate parameters

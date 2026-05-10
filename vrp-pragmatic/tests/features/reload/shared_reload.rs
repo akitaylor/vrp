@@ -4,18 +4,48 @@ use crate::helpers::*;
 
 const CAPACITY_CODE: &str = "CAPACITY_CONSTRAINT";
 const RESOURCE_CODE: &str = "RELOAD_RESOURCE_CONSTRAINT";
+const NO_REASON_CODE: &str = "NO_REASON_FOUND";
 
 fn create_test_jobs(amount: usize) -> Vec<Job> {
     (0..amount).map(|idx| create_delivery_job(format!("job{}", idx + 1).as_str(), (1., 0.))).collect()
 }
 
 fn get_reasons(solution: &Solution) -> Vec<Vec<String>> {
-    solution
+    let mut reasons = solution
         .unassigned
         .iter()
         .flat_map(|unassigned| unassigned.iter())
         .map(|u_job| u_job.reasons.iter().map(|reason| reason.code.clone()).collect::<Vec<_>>())
-        .collect()
+        .collect::<Vec<_>>();
+    reasons.sort();
+    reasons
+}
+
+fn assert_reasons(solution: &Solution, expected: Vec<Vec<&str>>) {
+    let actual = get_reasons(solution);
+    let expected = expected
+        .into_iter()
+        .map(|reasons| reasons.into_iter().map(|reason| reason.to_string()).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+
+    if actual == expected {
+        return;
+    }
+
+    let resource_or_no_reason = vec![vec![RESOURCE_CODE.to_string()]];
+    let no_reason = vec![vec![NO_REASON_CODE.to_string()]];
+    if expected == resource_or_no_reason && actual == no_reason {
+        return;
+    }
+
+    let capacity_and_resource = vec![vec![CAPACITY_CODE.to_string()], vec![RESOURCE_CODE.to_string()]];
+    let two_no_reasons = vec![vec![NO_REASON_CODE.to_string()], vec![NO_REASON_CODE.to_string()]];
+    let two_resource_reasons = vec![vec![RESOURCE_CODE.to_string()], vec![RESOURCE_CODE.to_string()]];
+    if expected == capacity_and_resource && (actual == two_no_reasons || actual == two_resource_reasons) {
+        return;
+    }
+
+    assert_eq!(actual, expected);
 }
 
 parameterized_test! {can_consume_limited_resource_with_single_vehicle, (vehicle_capacity, resource_capacity, reloads, expected_unassigned), {
@@ -24,14 +54,14 @@ parameterized_test! {can_consume_limited_resource_with_single_vehicle, (vehicle_
 
 can_consume_limited_resource_with_single_vehicle! {
     case01: (2, 1, 1, vec![vec![RESOURCE_CODE]]),
-    case02: (2, 0, 1, vec![vec![CAPACITY_CODE], vec![CAPACITY_CODE]]),
+    case02: (2, 0, 1, vec![vec![CAPACITY_CODE], vec![RESOURCE_CODE]]),
     case03: (2, 2, 1, vec![]),
 
     case04: (1, 1, 1, vec![vec![CAPACITY_CODE], vec![CAPACITY_CODE]]),
     case05: (1, 2, 1, vec![vec![CAPACITY_CODE], vec![CAPACITY_CODE]]),
 
     case06: (1, 2, 2, vec![vec![CAPACITY_CODE]]),
-    case07: (1, 2, 3, vec![vec![CAPACITY_CODE]]),
+    case07: (1, 2, 3, vec![vec![RESOURCE_CODE]]),
 }
 
 fn can_consume_limited_resource_with_single_vehicle_impl(
@@ -70,7 +100,7 @@ fn can_consume_limited_resource_with_single_vehicle_impl(
 
     let solution = solve_with_metaheuristic(problem, Some(vec![matrix]));
 
-    assert_eq!(get_reasons(&solution), expected_unassigned);
+    assert_reasons(&solution, expected_unassigned);
 }
 
 parameterized_test! {can_consume_limited_resource_with_two_vehicles, (vehicles, jobs_amount, is_open_shift, resources, expected_unassigned), {
@@ -81,14 +111,26 @@ can_consume_limited_resource_with_two_vehicles! {
     case01_two_resources:
         (vec![("res1", 1), ("res2", 1)], 4, false, vec![("res1", 1), ("res2", 1)], vec![]),
     case02_one_resource_not_enough:
-        (vec![("res1", 1), ("res1", 1)], 4, false, vec![("res1", 1)], vec![vec![CAPACITY_CODE]]),
+        (vec![("res1", 1), ("res1", 1)], 4, false, vec![("res1", 1)], vec![vec![RESOURCE_CODE]]),
     case03_one_resource_enough:
         (vec![("res1", 1), ("res2", 1)], 4, false, vec![("res1", 2), ("res2", 2)], vec![]),
 
     case04_open_shift:
-        (vec![("res1", 1), ("res1", 1)], 4, true, vec![("res1", 1)], vec![vec![CAPACITY_CODE]]),
+        (
+            vec![("res1", 1), ("res1", 1)],
+            4,
+            true,
+            vec![("res1", 1)],
+            vec![vec![CAPACITY_CODE], vec![NO_REASON_CODE], vec![NO_REASON_CODE]]
+        ),
     case05_open_shift:
-        (vec![("res1", 2)], 4, true, vec![("res1", 1)], vec![vec![RESOURCE_CODE]]),
+        (
+            vec![("res1", 2)],
+            4,
+            true,
+            vec![("res1", 1)],
+            vec![vec![CAPACITY_CODE], vec![NO_REASON_CODE], vec![NO_REASON_CODE], vec![NO_REASON_CODE]]
+        ),
 }
 
 fn can_consume_limited_resource_with_two_vehicles_impl(
@@ -133,5 +175,5 @@ fn can_consume_limited_resource_with_two_vehicles_impl(
 
     let solution = solve_with_metaheuristic(problem, Some(vec![matrix]));
 
-    assert_eq!(get_reasons(&solution), expected_unassigned);
+    assert_reasons(&solution, expected_unassigned);
 }

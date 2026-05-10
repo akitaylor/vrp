@@ -21,9 +21,8 @@ fn check_break_assignment(context: &CheckerContext) -> GenericResult<()> {
             .flat_map(|stop| stop.activities().iter())
             .filter(|activity| activity.activity_type == "break")
             .count();
-        let matched_break_count =
-            tour.stops.iter().try_fold(0, |acc, stop| {
-                stop.activities()
+        let matched_break_count = tour.stops.iter().try_fold(0, |acc, stop| {
+            stop.activities()
                     .iter()
                     .enumerate()
                     .flat_map(|(idx, _)| get_break_activity_info(context, tour, stop, idx))
@@ -69,7 +68,7 @@ fn check_break_assignment(context: &CheckerContext) -> GenericResult<()> {
                             Ok(acc + 1)
                         },
                     )
-            })?;
+        })?;
 
         if actual_break_count != matched_break_count {
             return Err(format!(

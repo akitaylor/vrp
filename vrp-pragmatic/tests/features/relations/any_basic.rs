@@ -1,7 +1,5 @@
 use crate::format::problem::*;
 use crate::helpers::*;
-use std::panic::catch_unwind;
-
 #[test]
 fn can_skip_constraints_check() {
     let problem = Problem {
@@ -23,14 +21,8 @@ fn can_skip_constraints_check() {
     };
     let matrix = create_matrix_from_problem(&problem);
 
-    let result = catch_unwind(|| solve_with_metaheuristic(problem, Some(vec![matrix])))
-        .map_err(|err| err.downcast_ref::<String>().cloned());
+    let solution = solve_with_metaheuristic(problem, Some(vec![matrix]));
 
-    match result {
-        Err(Some(err)) => {
-            assert!(err.starts_with("check failed: 'load exceeds capacity in tour 'my_vehicle_1'"));
-        }
-        Err(None) => unreachable!("unknown panic message type"),
-        Ok(_) => unreachable!("unexpected load or missing checker rule"),
-    }
+    assert!(solution.tours.is_empty());
+    assert_eq!(solution.unassigned.unwrap().len(), 2);
 }

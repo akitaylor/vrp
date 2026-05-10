@@ -9,9 +9,9 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::sync::Arc;
 use vrp_cli::core::solver::TargetHeuristic;
-use vrp_cli::extensions::solve::interrupt::create_interruption_quota;
 use vrp_cli::extensions::solve::config::create_builder_from_config_file;
 use vrp_cli::extensions::solve::formats::*;
+use vrp_cli::extensions::solve::interrupt::create_interruption_quota;
 use vrp_core::construction::heuristics::InsertionContext;
 use vrp_core::models::common::Footprint;
 use vrp_core::prelude::*;
@@ -389,13 +389,7 @@ fn get_environment(matches: &ArgMatches) -> GenericResult<Arc<Environment>> {
                     Arc::new(|_: &str| {})
                 };
                 let quota = Some(create_interruption_quota(max_time, logger.clone()));
-                Ok(Arc::new(Environment::new(
-                    random.clone(),
-                    quota.clone(),
-                    parallelism,
-                    logger,
-                    is_experimental,
-                )))
+                Ok(Arc::new(Environment::new(random.clone(), quota.clone(), parallelism, logger, is_experimental)))
             } else {
                 Err("cannot parse parallelism parameter".into())
             }
@@ -455,4 +449,3 @@ fn get_heuristic(
 fn check_pragmatic_solution_with_args(matches: &ArgMatches) -> GenericResult<()> {
     check_solution(matches, "pragmatic", PROBLEM_ARG_NAME, OUT_RESULT_ARG_NAME, MATRIX_ARG_NAME)
 }
-

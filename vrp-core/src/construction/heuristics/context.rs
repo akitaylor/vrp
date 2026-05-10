@@ -414,6 +414,7 @@ impl From<(InsertionContext, Option<TelemetryMetrics>)> for Solution {
     fn from(value: (InsertionContext, Option<TelemetryMetrics>)) -> Self {
         let (mut insertion_ctx, telemetry) = value;
         repair_conditional_jobs(&mut insertion_ctx);
+        unassign_invalid_routes_by_capacity(&mut insertion_ctx);
         let cost = insertion_ctx.get_total_cost().unwrap_or_default();
         let solution_ctx = insertion_ctx.solution;
 

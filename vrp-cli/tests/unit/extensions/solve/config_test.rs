@@ -167,8 +167,7 @@ fn can_configure_telemetry_metrics() {
 #[test]
 fn can_read_scarce_jobs_config() {
     let config = read_config(BufReader::new(
-        r#"{"scarceJobs":{"enabled":true,"maxCompatibleVehicles":2,"lockCompatibleVehicles":1,"log":true}}"#
-            .as_bytes(),
+        r#"{"scarceJobs":{"enabled":true,"maxCompatibleVehicles":2,"lockCompatibleVehicles":1,"log":true}}"#.as_bytes(),
     ))
     .unwrap();
 
@@ -177,6 +176,59 @@ fn can_read_scarce_jobs_config() {
     assert_eq!(scarce_jobs.max_compatible_vehicles, Some(2));
     assert_eq!(scarce_jobs.lock_compatible_vehicles, Some(1));
     assert_eq!(scarce_jobs.log, Some(true));
+}
+
+#[test]
+fn can_read_cluster_relocate_local_operator_config() {
+    let config = read_config(BufReader::new(
+        r#"{
+            "hyper": {
+                "type": "static-selective",
+                "operators": [{
+                    "type": "local-search",
+                    "probability": { "scalar": 1.0 },
+                    "times": { "min": 1, "max": 2 },
+                    "operators": [{
+                        "type": "cluster-relocate",
+                        "weight": 3,
+                        "routeNeighbors": 2,
+                        "jobCandidates": 5,
+                        "maxEvictions": 1,
+                        "neighborRadius": 4,
+                        "minSharedNeighbors": 1,
+                        "allowUnassigned": false
+                    }]
+                }]
+            }
+        }"#
+        .as_bytes(),
+    ))
+    .unwrap();
+
+    let HyperType::StaticSelective { operators: Some(operators) } = config.hyper.expect("cannot get hyper") else {
+        unreachable!()
+    };
+    let SearchOperatorType::LocalSearch { operators: inners, .. } = operators.first().unwrap() else { unreachable!() };
+    let LocalOperatorType::ClusterRelocate {
+        weight,
+        route_neighbors,
+        job_candidates,
+        max_evictions,
+        neighbor_radius,
+        min_shared_neighbors,
+        allow_unassigned,
+    } = inners.first().unwrap()
+    else {
+        unreachable!()
+    };
+
+    assert_eq!(*weight, 3);
+    assert_eq!(*route_neighbors, Some(2));
+    assert_eq!(*job_candidates, Some(5));
+    assert_eq!(*max_evictions, Some(1));
+    assert_eq!(*neighbor_radius, Some(4));
+    assert_eq!(*min_shared_neighbors, Some(1));
+    assert_eq!(*allow_unassigned, Some(false));
 }
 
 fn as_scalar_probability(probability: &OperatorProbabilityType) -> Float {

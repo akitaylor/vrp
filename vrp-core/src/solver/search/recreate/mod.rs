@@ -36,7 +36,9 @@ mod recreate_with_regret;
 pub use self::recreate_with_regret::RecreateWithRegret;
 
 mod recreate_with_scarce_jobs;
-pub use self::recreate_with_scarce_jobs::{RecreateWithScarceJobs, ScarceJobsSettings, ScarceJobsSettingsExtraProperty};
+pub use self::recreate_with_scarce_jobs::{
+    RecreateWithScarceJobs, ScarceJobsSettings, ScarceJobsSettingsExtraProperty,
+};
 
 mod recreate_with_skip_best;
 pub use self::recreate_with_skip_best::RecreateWithSkipBest;

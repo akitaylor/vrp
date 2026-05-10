@@ -6,7 +6,7 @@ mod breaks_test;
 
 use super::*;
 use crate::construction::enablers::*;
-use crate::models::solution::Route;
+use crate::models::solution::{Activity, Route};
 use std::collections::HashSet;
 use std::iter::once;
 
@@ -332,7 +332,7 @@ fn is_required_single(
 /// Checks whether break can be scheduled in route.
 fn can_be_scheduled(route_ctx: &RouteContext, break_single: &Single, policy_fn: &BreakPolicyFn) -> bool {
     let departure = route_ctx.route().tour.start().unwrap().schedule.departure;
-    let arrival = route_ctx.route().tour.end().map_or(0., |end| end.schedule.arrival);
+    let arrival = get_arrival_without_break(route_ctx, break_single);
     let tour_tw = TimeWindow::new(departure, arrival);
 
     let policy = policy_fn(break_single);
@@ -341,6 +341,33 @@ fn can_be_scheduled(route_ctx: &RouteContext, break_single: &Single, policy_fn: 
         BreakPolicy::SkipIfNoIntersection => break_tw.intersects(&tour_tw),
         BreakPolicy::SkipIfArrivalBeforeEnd => tour_tw.end > break_tw.end,
     })
+}
+
+fn get_arrival_without_break(route_ctx: &RouteContext, break_single: &Single) -> Timestamp {
+    let route = route_ctx.route();
+    let departure = route.tour.start().unwrap().schedule.departure;
+    let arrival = route.tour.end().map_or(0., |end| end.schedule.arrival);
+
+    let (_, extra) = route.tour.all_activities().fold((None, 0.), |(prev, extra), activity| {
+        let is_same_break = activity.job.as_ref().is_some_and(|single| std::ptr::eq(single.as_ref(), break_single));
+
+        let extra = if is_same_break {
+            let duration = activity.schedule.departure - activity.schedule.arrival;
+            let same_location_waiting = prev
+                .filter(|prev: &&Activity| prev.place.location == activity.place.location)
+                .map_or(0., |prev| (activity.schedule.arrival - prev.schedule.departure).max(0.));
+
+            extra + duration + same_location_waiting
+        } else {
+            extra
+        };
+
+        let prev = if is_same_break { prev } else { Some(activity) };
+
+        (prev, extra)
+    });
+
+    (arrival - extra).max(departure)
 }
 
 fn get_break_time_windows(break_single: &'_ Single, departure: Timestamp) -> impl Iterator<Item = TimeWindow> + '_ {

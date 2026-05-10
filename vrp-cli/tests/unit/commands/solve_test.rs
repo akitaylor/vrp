@@ -1,5 +1,7 @@
 use super::*;
 use crate::cli::{get_app, run_subcommand};
+use vrp_core::models::examples::create_example_problem;
+use vrp_core::rosomaxa::HeuristicSolution;
 
 const PRAGMATIC_PROBLEM_PATH: &str = "../examples/data/pragmatic/simple.basic.problem.json";
 const PRAGMATIC_MATRIX_PATH: &str = "../examples/data/pragmatic/simple.basic.matrix.json";
@@ -161,7 +163,7 @@ fn can_use_init_size() {
 
 #[test]
 fn can_infer_init_size_from_provided_init_solutions() {
-    let problem = Arc::new(create_example_problem());
+    let problem = create_example_problem();
     let environment = Arc::new(Environment::default());
     let init_solution = InsertionContext::new(problem.clone(), environment);
 

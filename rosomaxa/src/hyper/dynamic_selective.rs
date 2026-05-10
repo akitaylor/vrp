@@ -55,9 +55,10 @@ where
     }
 
     fn search_many(&mut self, heuristic_ctx: &Self::Context, solutions: Vec<&Self::Solution>) -> Vec<Self::Solution> {
-        let feedbacks = heuristic_ctx.environment().parallelism.map_collect(solutions, |solution| {
-            self.agent.search(heuristic_ctx, solution)
-        });
+        let feedbacks = heuristic_ctx
+            .environment()
+            .parallelism
+            .map_collect(solutions, |solution| self.agent.search(heuristic_ctx, solution));
 
         let generation = heuristic_ctx.statistics().generation;
         feedbacks.iter().for_each(|feedback| {

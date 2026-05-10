@@ -176,7 +176,14 @@ fn can_check_solution_statistic() {
 
 #[test]
 fn can_check_transit_break_inserted_during_travel() {
-    let problem = create_test_problem();
+    let problem = Problem {
+        plan: Plan {
+            jobs: vec![create_delivery_job("job1", (5., 0.)), create_delivery_job("job2", (10., 0.))],
+            ..create_empty_plan()
+        },
+        fleet: create_default_fleet(),
+        ..create_empty_problem()
+    };
     let matrix = create_matrix_from_problem(&problem);
     let statistic = StatisticBuilder::default().driving(20).serving(2).break_time(2).build();
     let solution = create_test_solution_with_transit(statistic);

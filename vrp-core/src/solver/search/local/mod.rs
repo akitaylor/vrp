@@ -9,6 +9,9 @@ use std::sync::Arc;
 mod exchange_inter_route;
 pub use self::exchange_inter_route::*;
 
+mod cluster_relocate;
+pub use self::cluster_relocate::*;
+
 mod exchange_intra_route;
 pub use self::exchange_intra_route::*;
 

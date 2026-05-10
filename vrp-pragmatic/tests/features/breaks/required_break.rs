@@ -227,18 +227,11 @@ fn can_reschedule_break_early_from_transport_to_activity() {
                             .build_departure(),
                         StopBuilder::default()
                             .coordinate((5., 0.))
-                            .schedule_stamp(5., 8.)
+                            .schedule_stamp(5., 6.)
                             .load(vec![1])
                             .distance(5)
-                            .activity(
-                                ActivityBuilder::delivery()
-                                    .job_id("job1")
-                                    .coordinate((5., 0.))
-                                    .time_stamp(5., 6.)
-                                    .build()
-                            )
-                            .activity(ActivityBuilder::break_type().time_stamp(6., 8.).build())
-                            .build(),
+                            .build_single("job1", "delivery"),
+                        StopBuilder::new_transit().schedule_stamp(7., 9.).load(vec![1]).build_single("break", "break"),
                         StopBuilder::default()
                             .coordinate((10., 0.))
                             .schedule_stamp(13., 14.)

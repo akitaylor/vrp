@@ -38,31 +38,32 @@ pub fn read_init_solution<R: Read>(
     let actor_index = registry.all().map(|actor| (get_actor_key(actor.as_ref()), actor)).collect::<HashMap<_, _>>();
     let (job_index, coord_index) = get_indices(&problem.extras)?;
 
-    let routes = solution.tours.iter().fold(Vec::<_>::default(), |mut routes, tour| {
-        let actor_key = (tour.vehicle_id.clone(), tour.type_id.clone(), tour.shift_index);
-        let Some(actor) = actor_index.get(&actor_key).cloned() else { return routes };
-        registry.use_actor(&actor);
+    let routes =
+        solution.tours.iter().try_fold::<_, _, Result<_, GenericError>>(Vec::<_>::default(), |mut routes, tour| {
+            let actor_key = (tour.vehicle_id.clone(), tour.type_id.clone(), tour.shift_index);
+            let Some(actor) = actor_index.get(&actor_key).cloned() else { return Ok(routes) };
+            registry.use_actor(&actor);
 
-        let Ok(mut core_route) = create_core_route(actor, tour) else { return routes };
+            let mut core_route = create_core_route(actor, tour)?;
 
-        tour.stops.iter().for_each(|stop| {
-            stop.activities().iter().for_each(|activity| {
-                let _ = try_insert_activity(
-                    problem.as_ref(),
-                    &mut core_route,
-                    tour,
-                    stop,
-                    activity,
-                    job_index.as_ref(),
-                    coord_index.as_ref(),
-                    &mut added_jobs,
-                );
-            })
-        });
+            tour.stops.iter().try_for_each(|stop| {
+                stop.activities().iter().try_for_each(|activity| {
+                    try_insert_activity(
+                        problem.as_ref(),
+                        &mut core_route,
+                        tour,
+                        stop,
+                        activity,
+                        job_index.as_ref(),
+                        coord_index.as_ref(),
+                        &mut added_jobs,
+                    )
+                })
+            })?;
 
-        routes.push(core_route);
-        routes
-    });
+            routes.push(core_route);
+            Ok(routes)
+        })?;
 
     let mut unassigned = solution
         .unassigned
@@ -109,7 +110,7 @@ fn try_insert_activity(
     added_jobs: &mut HashSet<Job>,
 ) -> Result<(), GenericError> {
     if activity.commute.is_some() {
-        return Ok(());
+        return Err("commute property in initial solution is not supported".into());
     }
 
     match stop {

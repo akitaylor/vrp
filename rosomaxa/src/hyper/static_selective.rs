@@ -44,9 +44,10 @@ where
     }
 
     fn search_many(&mut self, heuristic_ctx: &Self::Context, solutions: Vec<&Self::Solution>) -> Vec<Self::Solution> {
-        heuristic_ctx.environment().parallelism.map_collect(solutions, |solution| {
-            self.search_once(heuristic_ctx, solution)
-        })
+        heuristic_ctx
+            .environment()
+            .parallelism
+            .map_collect(solutions, |solution| self.search_once(heuristic_ctx, solution))
     }
 
     fn diversify(&self, heuristic_ctx: &Self::Context, solution: &Self::Solution) -> Vec<Self::Solution> {

@@ -95,12 +95,7 @@ fn create_problem(jobs: Vec<Job>) -> Problem {
     problem.build()
 }
 
-fn create_job(
-    id: &str,
-    all_of: Option<Vec<&str>>,
-    one_of: Option<Vec<&str>>,
-    none_of: Option<Vec<&str>>,
-) -> Job {
+fn create_job(id: &str, all_of: Option<Vec<&str>>, one_of: Option<Vec<&str>>, none_of: Option<Vec<&str>>) -> Job {
     let mut job = TestSingleBuilder::default();
     job.id(id);
     job.dimens_mut().set_job_skills(JobSkills {

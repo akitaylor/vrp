@@ -43,7 +43,7 @@ fn create_default_breaks() -> Option<Vec<VehicleBreak>> {
 
 fn create_required_breaks() -> Option<Vec<VehicleBreak>> {
     Some(vec![VehicleBreak::Required {
-        time: VehicleRequiredBreakTime::OffsetTime { earliest: 5.0, latest: 10.0 },
+        time: VehicleRequiredBreakTime::ExactTime { earliest: format_time(5.), latest: format_time(10.) },
         duration: 2.0,
     }])
 }
@@ -84,6 +84,13 @@ fn get_init_solution(problem: Problem, solution: &Solution) -> Result<Solution, 
     let bytes = writer.into_inner().expect("cannot get bytes from writer");
 
     deserialize_solution(BufReader::new(bytes.as_slice())).map_err(|err| format!("cannot read solution: {err}").into())
+}
+
+fn assert_solution_with_sorted_unassigned(mut result: Solution, mut expected: Solution) {
+    result.unassigned.iter_mut().for_each(|jobs| jobs.sort_by(|left, right| left.job_id.cmp(&right.job_id)));
+    expected.unassigned.iter_mut().for_each(|jobs| jobs.sort_by(|left, right| left.job_id.cmp(&right.job_id)));
+
+    assert_eq!(result, expected);
 }
 
 #[test]
@@ -148,7 +155,7 @@ fn can_read_basic_init_solution() {
 }
 
 #[test]
-fn can_read_required_break_which_starts_at_latest_offset_boundary() {
+fn can_ignore_required_break_which_starts_at_latest_offset_boundary() {
     let problem = create_basic_problem(create_required_breaks());
 
     let solution = SolutionBuilder::default()
@@ -185,11 +192,35 @@ fn can_read_required_break_which_starts_at_latest_offset_boundary() {
     let result_solution =
         get_init_solution(problem, &solution).unwrap_or_else(|err| panic!("cannot get solution: {err}"));
 
-    assert_eq!(result_solution, solution);
+    let expected = SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![1]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((1., 0.))
+                        .schedule_stamp(1., 2.)
+                        .load(vec![0])
+                        .distance(1)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(3., 3.)
+                        .load(vec![0])
+                        .distance(2)
+                        .build_arrival(),
+                ])
+                .statistic(StatisticBuilder::default().driving(2).serving(1).build())
+                .build(),
+        )
+        .unassigned(create_unassigned_jobs(&["job2", "job3"]))
+        .build();
+
+    assert_solution_with_sorted_unassigned(result_solution, expected);
 }
 
 #[test]
-fn can_read_required_break_on_transit_stop() {
+fn can_ignore_required_break_on_transit_stop() {
     let problem = create_basic_problem(create_required_breaks());
 
     let solution = SolutionBuilder::default()
@@ -220,7 +251,31 @@ fn can_read_required_break_on_transit_stop() {
     let result_solution =
         get_init_solution(problem, &solution).unwrap_or_else(|err| panic!("cannot get solution: {err}"));
 
-    assert_eq!(result_solution, solution);
+    let expected = SolutionBuilder::default()
+        .tour(
+            TourBuilder::default()
+                .stops(vec![
+                    StopBuilder::default().coordinate((0., 0.)).schedule_stamp(0., 0.).load(vec![1]).build_departure(),
+                    StopBuilder::default()
+                        .coordinate((1., 0.))
+                        .schedule_stamp(1., 2.)
+                        .load(vec![0])
+                        .distance(1)
+                        .build_single("job1", "delivery"),
+                    StopBuilder::default()
+                        .coordinate((0., 0.))
+                        .schedule_stamp(3., 3.)
+                        .load(vec![0])
+                        .distance(2)
+                        .build_arrival(),
+                ])
+                .statistic(StatisticBuilder::default().driving(2).serving(1).build())
+                .build(),
+        )
+        .unassigned(create_unassigned_jobs(&["job3", "job2"]))
+        .build();
+
+    assert_solution_with_sorted_unassigned(result_solution, expected);
 }
 
 #[test]

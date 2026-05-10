@@ -18,13 +18,17 @@ use vrp_core::solver::processing::{ClusterConfigExtraProperty, ReservedTimesExtr
 use vrp_core::utils::CollectGroupBy;
 
 struct Leg {
-    pub last_detail: Option<(DomainLocation, Timestamp)>,
+    pub last_detail: Option<(DomainLocation, Timestamp, bool)>,
     pub load: Option<MultiDimLoad>,
     pub statistic: Statistic,
 }
 
 impl Leg {
-    fn new(last_detail: Option<(DomainLocation, Timestamp)>, load: Option<MultiDimLoad>, statistic: Statistic) -> Self {
+    fn new(
+        last_detail: Option<(DomainLocation, Timestamp, bool)>,
+        load: Option<MultiDimLoad>,
+        statistic: Statistic,
+    ) -> Self {
         Self { last_detail, load, statistic }
     }
 
@@ -132,10 +136,14 @@ fn create_tour(
         };
 
         let mut leg = route.tour.activities_slice(start_idx, end_idx).iter().fold(
-            Leg::new(Some((start.place.location, start.schedule.departure)), Some(start_delivery), leg.statistic),
+            Leg::new(
+                Some((start.place.location, start.schedule.departure, false)),
+                Some(start_delivery),
+                leg.statistic,
+            ),
             |leg, act| {
                 let activity_type = get_activity_type(act).cloned();
-                let (prev_location, prev_departure) = leg.last_detail.unwrap();
+                let (prev_location, prev_departure, prev_had_commute) = leg.last_detail.unwrap();
                 let prev_load = if activity_type.is_some() {
                     leg.load.unwrap()
                 } else {
@@ -181,12 +189,26 @@ fn create_tour(
                         _ => 0.,
                     };
 
-                let activity_arrival = parking + act.schedule.arrival + commute.forward.duration;
+                let schedule_arrival =
+                    if act.commute.is_none() && prev_had_commute && prev_location != act.place.location {
+                        act.schedule.arrival.max(prev_departure + driving)
+                    } else {
+                        act.schedule.arrival
+                    };
+                let commute_start = if commute.forward.is_zero_distance() { schedule_arrival } else { prev_departure };
+                let activity_arrival = parking + commute_start + commute.forward.duration;
                 let service_start = activity_arrival.max(act.place.time.start);
                 let waiting = service_start - activity_arrival;
                 let serving = act.place.duration - parking;
                 let service_end = service_start + serving;
                 let activity_departure = service_end;
+                let activity_leave = if act.commute.is_some() && !commute.is_zero_distance() {
+                    activity_departure + commute.backward.duration
+                } else if act.commute.is_none() && schedule_arrival > act.schedule.arrival {
+                    activity_departure
+                } else {
+                    act.schedule.departure
+                };
 
                 // TODO: add better support of time based activity costs
                 let serving_cost = problem.activity.cost(route, act, service_start);
@@ -206,7 +228,10 @@ fn create_tour(
                 if is_new_stop {
                     tour.stops.push(Stop::Point(PointStop {
                         location: coord_index.get_by_idx(act.place.location).unwrap(),
-                        time: format_schedule(&act.schedule),
+                        time: ApiSchedule {
+                            arrival: format_time(schedule_arrival),
+                            departure: format_time(activity_leave),
+                        },
                         load: prev_load.as_vec(),
                         distance,
                         parking: if parking > 0. {
@@ -229,7 +254,7 @@ fn create_tour(
                     Stop::Transit(_) => unreachable!(),
                 };
 
-                last.time.departure = format_time(act.schedule.departure);
+                last.time.departure = format_time(activity_leave);
                 last.load = load.as_vec();
                 last.activities.push(ApiActivity {
                     job_id,
@@ -243,7 +268,7 @@ fn create_tour(
                     commute: act
                         .commute
                         .as_ref()
-                        .map(|commute| Commute::new(commute, act.schedule.arrival, activity_departure, coord_index)),
+                        .map(|commute| Commute::new(commute, commute_start, activity_departure, coord_index)),
                 });
 
                 // NOTE detect when vehicle returns after activity to stop point
@@ -258,11 +283,15 @@ fn create_tour(
                 };
 
                 Leg {
-                    last_detail: Some((end_location, act.schedule.departure)),
+                    last_detail: Some((
+                        end_location,
+                        activity_leave,
+                        act.commute.is_some() && !commute.is_zero_distance(),
+                    )),
                     statistic: Statistic {
                         cost: leg.statistic.cost + total_cost,
                         distance,
-                        duration: leg.statistic.duration + act.schedule.departure as i64 - prev_departure as i64,
+                        duration: leg.statistic.duration + activity_leave as i64 - prev_departure as i64,
                         times: Timing {
                             driving: leg.statistic.times.driving + driving as i64,
                             serving: leg.statistic.times.serving + (if is_break { 0 } else { serving as i64 }),
