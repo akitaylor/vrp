@@ -181,6 +181,8 @@ impl TransportConstraint {
     ) -> Option<ConstraintViolation> {
         let actor = route_ctx.route().actor.as_ref();
         let route = route_ctx.route();
+        // Reuse route-state reserved windows for all transport checks in this activity evaluation.
+        let reserved_times = route_ctx.state().get_resolved_reserved_times().map(Vec::as_slice);
 
         let prev = activity_ctx.prev;
         let target = activity_ctx.target;
@@ -196,6 +198,7 @@ impl TransportConstraint {
         }
 
         let (next_act_location, latest_arr_time_at_next) = if let Some(next) = next {
+            // Latest-arrival state is computed backward during route schedule refresh.
             let latest_arrival = route_ctx.state().get_latest_arrival_at(activity_ctx.index + 1).copied();
             (next.place.location, latest_arrival.unwrap_or(next.place.time.end))
         } else {
@@ -204,8 +207,16 @@ impl TransportConstraint {
         };
 
         let arr_time_at_next = departure
-            + self.transport.duration(route, prev.place.location, next_act_location, TravelTime::Departure(departure));
+            + duration_with_reserved_times(
+                self.transport.as_ref(),
+                route,
+                reserved_times,
+                prev.place.location,
+                next_act_location,
+                TravelTime::Departure(departure),
+            );
 
+        // First check whether replacing prev->next with any target is temporally impossible.
         if arr_time_at_next > latest_arr_time_at_next {
             return ConstraintViolation::fail(self.time_window_code);
         }
@@ -214,16 +225,21 @@ impl TransportConstraint {
         }
 
         let arr_time_at_target = departure
-            + self.transport.duration(
+            + duration_with_reserved_times(
+                self.transport.as_ref(),
                 route,
+                reserved_times,
                 prev.place.location,
                 target.place.location,
                 TravelTime::Departure(departure),
             );
 
+        // Reverse check: target must still be able to leave early enough to reach next.
         let latest_departure_at_target = latest_arr_time_at_next
-            - self.transport.duration(
+            - duration_with_reserved_times(
+                self.transport.as_ref(),
                 route,
+                reserved_times,
                 target.place.location,
                 next_act_location,
                 TravelTime::Arrival(latest_arr_time_at_next),
@@ -251,8 +267,10 @@ impl TransportConstraint {
         };
 
         let arr_time_at_next = end_time_at_target
-            + self.transport.duration(
+            + duration_with_reserved_times(
+                self.transport.as_ref(),
                 route,
+                reserved_times,
                 target.place.location,
                 next_act_location,
                 TravelTime::Departure(end_time_at_target),
@@ -297,9 +315,15 @@ impl FeatureObjective for DistanceObjective {
             return Cost::default();
         };
 
-        estimate_leg(self.transport.as_ref(), self.activity.as_ref(), route_ctx, activity_ctx, |from, to, time| {
-            self.transport.distance(route_ctx.route(), from, to, time)
-        })
+        estimate_leg(
+            self.transport.as_ref(),
+            self.activity.as_ref(),
+            route_ctx,
+            activity_ctx,
+            // The distance objective still needs cached duration to calculate target departure.
+            route_ctx.state().get_resolved_reserved_times().map(Vec::as_slice),
+            |from, to, time| self.transport.distance(route_ctx.route(), from, to, time),
+        )
     }
 }
 
@@ -320,9 +344,19 @@ impl FeatureObjective for DurationObjective {
             return Cost::default();
         };
 
-        estimate_leg(self.transport.as_ref(), self.activity.as_ref(), route_ctx, activity_ctx, |from, to, time| {
-            self.transport.duration(route_ctx.route(), from, to, time)
-        })
+        let reserved_times = route_ctx.state().get_resolved_reserved_times().map(Vec::as_slice);
+
+        // Duration objective compares the changed route segment using the resolved reserved-time cache.
+        estimate_leg(
+            self.transport.as_ref(),
+            self.activity.as_ref(),
+            route_ctx,
+            activity_ctx,
+            reserved_times,
+            |from, to, time| {
+                duration_with_reserved_times(self.transport.as_ref(), route_ctx.route(), reserved_times, from, to, time)
+            },
+        )
     }
 }
 
@@ -331,6 +365,7 @@ fn estimate_leg<FE>(
     activity: &dyn ActivityCost,
     route_ctx: &RouteContext,
     activity_ctx: &ActivityContext,
+    reserved_times: Option<&[ReservedTimeWindow]>,
     estimate_fn: FE,
 ) -> Float
 where
@@ -344,8 +379,10 @@ where
 
     // prev -> target
     let (prev_target, dep_time_target) = {
+        // Duration is needed here even for distance/cost estimation because it determines target departure.
         let time = activity_ctx.prev.schedule.departure;
-        let arrival = time + transport.duration(route, prev, target, prev_dep);
+        let arrival =
+            time + duration_with_reserved_times(transport, route_ctx.route(), reserved_times, prev, target, prev_dep);
         let departure = activity.estimate_departure(route, activity_ctx.target, arrival).unwrap_value();
 
         (estimate_fn(prev, target, prev_dep), departure)
@@ -392,6 +429,7 @@ impl CostObjective {
     }
 
     fn estimate_activity(&self, route_ctx: &RouteContext, activity_ctx: &ActivityContext) -> Float {
+        // Cost estimate is a local delta: new prev->target->next minus old prev->next plus overtime.
         let prev = activity_ctx.prev;
         let target = activity_ctx.target;
         let next = activity_ctx.next;
@@ -439,13 +477,28 @@ impl CostObjective {
         time: Timestamp,
     ) -> (Cost, Cost, Timestamp) {
         let route = route_ctx.route();
+        // Resolve the cache once per leg analysis to avoid repeated RouteState hash lookups.
+        let reserved_times = route_ctx.state().get_resolved_reserved_times().map(Vec::as_slice);
 
         let arrival = time
-            + self.transport.duration(route, start.place.location, end.place.location, TravelTime::Departure(time));
+            + duration_with_reserved_times(
+                self.transport.as_ref(),
+                route,
+                reserved_times,
+                start.place.location,
+                end.place.location,
+                TravelTime::Departure(time),
+            );
         let departure = self.activity.estimate_departure(route, end, arrival).unwrap_value();
 
-        let transport_cost =
-            self.transport.cost(route, start.place.location, end.place.location, TravelTime::Departure(time));
+        let transport_cost = cost_with_reserved_times(
+            self.transport.as_ref(),
+            route,
+            reserved_times,
+            start.place.location,
+            end.place.location,
+            TravelTime::Departure(time),
+        );
         let activity_cost = self.activity.cost(route, end, arrival);
 
         (transport_cost, activity_cost, departure)
@@ -497,12 +550,16 @@ impl FeatureState for TransportState {
     }
 
     fn accept_route_state(&self, route_ctx: &mut RouteContext) {
+        // Schedule must be refreshed before reserved windows can be resolved against it.
         update_route_schedule(route_ctx, self.activity.as_ref(), self.transport.as_ref());
+        update_resolved_reserved_times_state(route_ctx, self.transport.as_ref());
     }
 
     fn accept_solution_state(&self, solution_ctx: &mut SolutionContext) {
         solution_ctx.routes.iter_mut().filter(|route_ctx| route_ctx.is_stale()).for_each(|route_ctx| {
+            // Only stale routes need schedule and reserved-window cache rebuild.
             update_route_schedule(route_ctx, self.activity.as_ref(), self.transport.as_ref());
+            update_resolved_reserved_times_state(route_ctx, self.transport.as_ref());
         })
     }
 }

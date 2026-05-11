@@ -6,6 +6,7 @@ use crate::models::common::*;
 use crate::models::solution::{Activity, Route};
 use rosomaxa::prelude::{Float, GenericError, GenericResult};
 use rosomaxa::utils::CollectGroupBy;
+use std::any::Any;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -78,9 +79,10 @@ impl ActivityCost for SimpleActivityCost {
 }
 
 /// Provides the way to get routing information for specific locations and actor.
-pub trait TransportCost: Send + Sync {
+pub trait TransportCost: Send + Sync + Any {
     /// Returns time-dependent transport cost between two locations for given actor.
     fn cost(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Cost {
+        // Default cost is derived from distance and duration using actor-specific rates.
         let actor = route.actor.as_ref();
 
         let distance = self.distance(route, from, to, travel_time);
@@ -88,6 +90,12 @@ pub trait TransportCost: Send + Sync {
 
         distance * (actor.driver.costs.per_distance + actor.vehicle.costs.per_distance)
             + duration * (actor.driver.costs.per_driving_time + actor.vehicle.costs.per_driving_time)
+    }
+
+    /// Returns transport cost without dynamic reserved-time adjustments.
+    fn cost_without_reserved_time(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Cost {
+        // Implementations with dynamic break/reserved-time logic override this for hot cached paths.
+        self.cost(route, from, to, travel_time)
     }
 
     /// Returns time-independent travel duration between locations specific for given profile.
@@ -99,11 +107,31 @@ pub trait TransportCost: Send + Sync {
     /// Returns time-dependent travel duration between locations specific for given actor.
     fn duration(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Duration;
 
+    /// Returns travel duration without dynamic reserved-time adjustments.
+    fn duration_without_reserved_time(
+        &self,
+        route: &Route,
+        from: Location,
+        to: Location,
+        travel_time: TravelTime,
+    ) -> Duration {
+        // Default keeps older implementations correct when no reserved-time split is available.
+        self.duration(route, from, to, travel_time)
+    }
+
     /// Returns time-dependent travel distance between locations specific for given actor.
     fn distance(&self, route: &Route, from: Location, to: Location, travel_time: TravelTime) -> Distance;
 
     /// Returns size of known locations
     fn size(&self) -> usize;
+}
+
+impl dyn TransportCost {
+    /// Returns transport cost as `Any` to support optional optimized paths.
+    pub fn as_any(&self) -> &dyn Any {
+        // Used sparingly to detect transports that can populate route-state reserved-time cache.
+        self
+    }
 }
 
 /// A simple implementation of transport costs around a single matrix.
@@ -260,7 +288,7 @@ impl<T: TransportFallback> TimeAgnosticMatrixTransportCost<T> {
     }
 }
 
-impl<T: TransportFallback> TransportCost for TimeAgnosticMatrixTransportCost<T> {
+impl<T: TransportFallback + 'static> TransportCost for TimeAgnosticMatrixTransportCost<T> {
     fn duration_approx(&self, profile: &Profile, from: Location, to: Location) -> Duration {
         self.durations
             .get(profile.index)
@@ -397,7 +425,7 @@ impl<T: TransportFallback> TimeAwareMatrixTransportCost<T> {
     }
 }
 
-impl<T: TransportFallback> TransportCost for TimeAwareMatrixTransportCost<T> {
+impl<T: TransportFallback + 'static> TransportCost for TimeAwareMatrixTransportCost<T> {
     fn duration_approx(&self, profile: &Profile, from: Location, to: Location) -> Duration {
         self.interpolate_duration(profile, from, to, TravelTime::Departure(0.))
     }
