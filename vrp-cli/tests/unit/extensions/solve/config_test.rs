@@ -196,7 +196,11 @@ fn can_read_cluster_relocate_local_operator_config() {
                         "maxEvictions": 1,
                         "neighborRadius": 4,
                         "minSharedNeighbors": 1,
-                        "allowUnassigned": false
+                        "allowUnassigned": false,
+                        "candidatePoolSize": 21,
+                        "phaseAware": false,
+                        "log": true,
+                        "logInterval": 7
                     }]
                 }]
             }
@@ -217,6 +221,10 @@ fn can_read_cluster_relocate_local_operator_config() {
         neighbor_radius,
         min_shared_neighbors,
         allow_unassigned,
+        candidate_pool_size,
+        phase_aware,
+        log,
+        log_interval,
     } = inners.first().unwrap()
     else {
         unreachable!()
@@ -229,6 +237,10 @@ fn can_read_cluster_relocate_local_operator_config() {
     assert_eq!(*neighbor_radius, Some(4));
     assert_eq!(*min_shared_neighbors, Some(1));
     assert_eq!(*allow_unassigned, Some(false));
+    assert_eq!(*candidate_pool_size, Some(21));
+    assert_eq!(*phase_aware, Some(false));
+    assert_eq!(*log, Some(true));
+    assert_eq!(*log_interval, Some(7));
 }
 
 fn as_scalar_probability(probability: &OperatorProbabilityType) -> Float {

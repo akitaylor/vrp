@@ -355,6 +355,10 @@ pub enum LocalOperatorType {
         neighbor_radius: Option<usize>,
         min_shared_neighbors: Option<usize>,
         allow_unassigned: Option<bool>,
+        candidate_pool_size: Option<usize>,
+        phase_aware: Option<bool>,
+        log: Option<bool>,
+        log_interval: Option<usize>,
     },
 }
 
@@ -954,6 +958,10 @@ fn create_local_search(
                 neighbor_radius,
                 min_shared_neighbors,
                 allow_unassigned,
+                candidate_pool_size,
+                phase_aware,
+                log,
+                log_interval,
             } => {
                 let defaults = ClusterRelocateConfig::default();
                 let config = ClusterRelocateConfig {
@@ -963,6 +971,10 @@ fn create_local_search(
                     neighbor_radius: neighbor_radius.unwrap_or(defaults.neighbor_radius),
                     min_shared_neighbors: min_shared_neighbors.unwrap_or(defaults.min_shared_neighbors),
                     allow_unassigned: allow_unassigned.unwrap_or(defaults.allow_unassigned),
+                    candidate_pool_size: candidate_pool_size.unwrap_or(defaults.candidate_pool_size),
+                    phase_aware: phase_aware.unwrap_or(defaults.phase_aware),
+                    log: log.unwrap_or(defaults.log),
+                    log_interval: log_interval.unwrap_or(defaults.log_interval),
                 };
 
                 (Arc::new(ClusterRelocate::new(config)), *weight)

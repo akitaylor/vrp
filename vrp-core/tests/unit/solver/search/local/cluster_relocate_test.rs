@@ -26,6 +26,8 @@ fn can_relocate_near_job_and_eject_far_job() {
         neighbor_radius: 3,
         min_shared_neighbors: 1,
         allow_unassigned: false,
+        phase_aware: false,
+        ..ClusterRelocateConfig::default()
     })
     .explore(&create_default_refinement_ctx(insertion_ctx.problem.clone()), &insertion_ctx)
     .expect("cannot find cluster relocate move");
@@ -54,10 +56,21 @@ fn cannot_relocate_when_evictions_are_disabled_and_target_is_full() {
         neighbor_radius: 3,
         min_shared_neighbors: 1,
         allow_unassigned: false,
+        phase_aware: false,
+        ..ClusterRelocateConfig::default()
     })
     .explore(&create_default_refinement_ctx(insertion_ctx.problem.clone()), &insertion_ctx);
 
     assert!(new_insertion_ctx.is_none());
+}
+
+#[test]
+fn can_calculate_phase_activation_probability() {
+    assert_eq!(get_phase_activation_probability(200, 500), 1.);
+    assert_eq!(get_phase_activation_probability(50, 500), 0.5);
+    assert_eq!(get_phase_activation_probability(10, 500), 0.2);
+    assert_eq!(get_phase_activation_probability(0, 500), 0.05);
+    assert_eq!(get_phase_activation_probability(1, 0), 0.);
 }
 
 fn create_cluster_relocate_problem() -> (Problem, Solution) {
