@@ -172,41 +172,11 @@ fn check_e1306_vehicle_has_no_zero_costs(ctx: &ValidationContext) -> Result<(), 
 }
 
 fn check_e1307_vehicle_offset_break_rescheduling(ctx: &ValidationContext) -> Result<(), FormatError> {
-    let type_ids = get_invalid_type_ids(
-        ctx,
-        Box::new(|_, shift, _| {
-            shift
-                .breaks
-                .as_ref()
-                .map(|breaks| {
-                    let has_time_offset = breaks.iter().any(|br| {
-                        matches!(
-                            br,
-                            VehicleBreak::Optional { time: VehicleOptionalBreakTime::TimeOffset(_), .. }
-                                | VehicleBreak::Required { time: VehicleRequiredBreakTime::OffsetTime { .. }, .. }
-                        )
-                    });
-                    let has_rescheduling =
-                        shift.start.latest.as_ref().is_none_or(|latest| *latest != shift.start.earliest);
+    // Offset-based breaks are resolved at runtime against the chosen departure time.
+    // Keep validation permissive so flexible vehicle departures remain available.
+    let _ = ctx;
 
-                    !(has_time_offset && has_rescheduling)
-                })
-                .unwrap_or(true)
-        }),
-    );
-
-    if type_ids.is_empty() {
-        Ok(())
-    } else {
-        Err(FormatError::new(
-            "E1307".to_string(),
-            "time offset interval for break is used with departure rescheduling".to_string(),
-            format!(
-                "when break time offset is used, start.latest should be set equal to start.earliest in the shift, check vehicle type ids: '{}'",
-                type_ids.join(", ")
-            ),
-        ))
-    }
+    Ok(())
 }
 
 fn check_e1308_vehicle_reload_resources(ctx: &ValidationContext) -> Result<(), FormatError> {

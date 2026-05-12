@@ -49,6 +49,9 @@ pub struct Config {
     /// Specifies optional scarce job handling.
     #[serde(rename = "scarceJobs")]
     pub scarce_jobs: Option<ScarceJobsConfig>,
+    /// Specifies optional cluster relocate boost for the default dynamic heuristic.
+    #[serde(rename = "clusterRelocate")]
+    pub cluster_relocate: Option<ClusterRelocateSearchConfig>,
 }
 
 /// An evolution configuration.
@@ -520,6 +523,36 @@ pub struct ScarceJobsConfig {
     pub log: Option<bool>,
 }
 
+/// Specifies cluster relocate as an add-on to the default dynamic heuristic.
+#[derive(Clone, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterRelocateSearchConfig {
+    /// Enables the add-on without replacing the default heuristic.
+    pub enabled: Option<bool>,
+    /// Initial dynamic heuristic weight. Keep it small so the operator nudges search occasionally.
+    pub search_weight: Option<Float>,
+    /// Number of nearby routes to inspect as relocation targets.
+    pub route_neighbors: Option<usize>,
+    /// Number of source jobs considered per call.
+    pub job_candidates: Option<usize>,
+    /// Max jobs evicted from the target route to make room.
+    pub max_evictions: Option<usize>,
+    /// Nearby jobs sampled around a moved job to measure route fit.
+    pub neighbor_radius: Option<usize>,
+    /// Minimum shared vicinity neighbors for a route to be considered cluster-compatible.
+    pub min_shared_neighbors: Option<usize>,
+    /// Allows accepting moves which keep or create unassigned jobs.
+    pub allow_unassigned: Option<bool>,
+    /// Max target candidates kept before feasibility checks.
+    pub candidate_pool_size: Option<usize>,
+    /// Skips the operator in the initial construction phase.
+    pub phase_aware: Option<bool>,
+    /// Enables lightweight operator statistics in logs.
+    pub log: Option<bool>,
+    /// Number of calls between stats log lines.
+    pub log_interval: Option<usize>,
+}
+
 fn configure_from_evolution(
     mut builder: ProblemConfigBuilder,
     problem: Arc<Problem>,
@@ -759,6 +792,7 @@ fn configure_from_hyper(
     problem: Arc<Problem>,
     environment: Arc<Environment>,
     hyper_config: &Option<HyperType>,
+    cluster_relocate_config: &Option<ClusterRelocateSearchConfig>,
 ) -> Result<ProblemConfigBuilder, GenericError> {
     if let Some(config) = hyper_config {
         match config {
@@ -779,6 +813,30 @@ fn configure_from_hyper(
                 let dynamic_selective = get_dynamic_heuristic(problem, environment);
                 builder = builder.with_heuristic(Box::new(dynamic_selective));
             }
+        }
+    } else if let Some(config) = cluster_relocate_config {
+        if config.enabled.unwrap_or(false) {
+            let defaults = ClusterRelocateConfig::default();
+            let cluster_config = ClusterRelocateConfig {
+                route_neighbors: config.route_neighbors.unwrap_or(defaults.route_neighbors),
+                job_candidates: config.job_candidates.unwrap_or(defaults.job_candidates),
+                max_evictions: config.max_evictions.unwrap_or(defaults.max_evictions),
+                neighbor_radius: config.neighbor_radius.unwrap_or(defaults.neighbor_radius),
+                min_shared_neighbors: config.min_shared_neighbors.unwrap_or(defaults.min_shared_neighbors),
+                allow_unassigned: config.allow_unassigned.unwrap_or(defaults.allow_unassigned),
+                candidate_pool_size: config.candidate_pool_size.unwrap_or(defaults.candidate_pool_size),
+                phase_aware: config.phase_aware.unwrap_or(defaults.phase_aware),
+                log: config.log.unwrap_or(defaults.log),
+                log_interval: config.log_interval.unwrap_or(defaults.log_interval),
+            };
+            let search_weight = config.search_weight.unwrap_or(0.25);
+
+            builder = builder.with_heuristic(Box::new(get_dynamic_heuristic_with_cluster_relocate(
+                problem,
+                environment,
+                cluster_config,
+                search_weight,
+            )));
         }
     }
 
@@ -1102,7 +1160,7 @@ pub fn create_builder_from_config(
     builder = configure_from_processing(builder, &config.vehicle_allocation);
     builder =
         configure_from_evolution(builder, problem.clone(), environment.clone(), telemetry_mode, &config.evolution)?;
-    builder = configure_from_hyper(builder, problem, environment, &config.hyper)?;
+    builder = configure_from_hyper(builder, problem, environment, &config.hyper, &config.cluster_relocate)?;
     builder = configure_from_termination(builder, &config.termination);
     if init_solution_len > 0 {
         builder = builder.with_init_solutions(solutions, Some(init_solution_len));

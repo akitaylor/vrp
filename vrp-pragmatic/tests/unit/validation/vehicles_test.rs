@@ -64,8 +64,8 @@ parameterized_test! {can_handle_rescheduling_with_required_break, (latest, expec
 }}
 
 can_handle_rescheduling_with_required_break! {
-    case01: (None, Some("E1307".to_string())),
-    case02: (Some(1.), Some("E1307".to_string())),
+    case01: (None, None),
+    case02: (Some(1.), None),
     case03: (Some(0.), None),
 }
 

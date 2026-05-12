@@ -182,6 +182,34 @@ pub fn get_dynamic_heuristic(
     )
 }
 
+/// Gets dynamic heuristic with an additional cluster relocate operator.
+pub fn get_dynamic_heuristic_with_cluster_relocate(
+    problem: Arc<Problem>,
+    environment: Arc<Environment>,
+    cluster_config: ClusterRelocateConfig,
+    cluster_weight: Float,
+) -> DynamicSelective<RefinementContext, GoalContext, InsertionContext> {
+    let mut search_operators = dynamic::get_operators(problem.clone(), environment.clone());
+    let cluster_operator: TargetSearchOperator =
+        Arc::new(LocalSearch::new(Arc::new(ClusterRelocate::new(cluster_config))));
+    let cluster_operator = problem
+        .extras
+        .get_vehicle_allocation_settings()
+        .map(|settings| {
+            Arc::new(VehicleAllocationSearch::new(cluster_operator.clone(), settings)) as TargetSearchOperator
+        })
+        .unwrap_or(cluster_operator);
+
+    search_operators.push((cluster_operator, "local_cluster_relocate".to_string(), cluster_weight));
+
+    let diversify_operators = create_diversify_operators(problem, environment.clone());
+    DynamicSelective::<RefinementContext, GoalContext, InsertionContext>::new(
+        search_operators,
+        diversify_operators,
+        environment.as_ref(),
+    )
+}
+
 /// Creates elitism population algorithm.
 pub fn create_elitism_population(
     objective: Arc<GoalContext>,

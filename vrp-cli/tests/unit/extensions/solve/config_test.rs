@@ -135,6 +135,7 @@ fn can_create_default_config() {
     assert!(config.termination.is_none());
     assert!(config.telemetry.is_none());
     assert!(config.scarce_jobs.is_none());
+    assert!(config.cluster_relocate.is_none());
 }
 
 #[test]
@@ -151,6 +152,7 @@ fn can_configure_telemetry_metrics() {
         output: None,
         vehicle_allocation: None,
         scarce_jobs: None,
+        cluster_relocate: None,
     };
 
     let solution = create_builder_from_config(create_example_problem(), Vec::default(), &config)
@@ -241,6 +243,44 @@ fn can_read_cluster_relocate_local_operator_config() {
     assert_eq!(*phase_aware, Some(false));
     assert_eq!(*log, Some(true));
     assert_eq!(*log_interval, Some(7));
+}
+
+#[test]
+fn can_read_cluster_relocate_default_heuristic_add_on_config() {
+    let config = read_config(BufReader::new(
+        r#"{
+            "clusterRelocate": {
+                "enabled": true,
+                "searchWeight": 0.25,
+                "routeNeighbors": 2,
+                "jobCandidates": 5,
+                "maxEvictions": 1,
+                "neighborRadius": 4,
+                "minSharedNeighbors": 1,
+                "allowUnassigned": false,
+                "candidatePoolSize": 21,
+                "phaseAware": false,
+                "log": true,
+                "logInterval": 7
+            }
+        }"#
+        .as_bytes(),
+    ))
+    .unwrap();
+
+    let cluster_relocate = config.cluster_relocate.expect("no cluster relocate config");
+    assert_eq!(cluster_relocate.enabled, Some(true));
+    assert_eq!(cluster_relocate.search_weight, Some(0.25));
+    assert_eq!(cluster_relocate.route_neighbors, Some(2));
+    assert_eq!(cluster_relocate.job_candidates, Some(5));
+    assert_eq!(cluster_relocate.max_evictions, Some(1));
+    assert_eq!(cluster_relocate.neighbor_radius, Some(4));
+    assert_eq!(cluster_relocate.min_shared_neighbors, Some(1));
+    assert_eq!(cluster_relocate.allow_unassigned, Some(false));
+    assert_eq!(cluster_relocate.candidate_pool_size, Some(21));
+    assert_eq!(cluster_relocate.phase_aware, Some(false));
+    assert_eq!(cluster_relocate.log, Some(true));
+    assert_eq!(cluster_relocate.log_interval, Some(7));
 }
 
 fn as_scalar_probability(probability: &OperatorProbabilityType) -> Float {
