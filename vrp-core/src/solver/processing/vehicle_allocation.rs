@@ -18,7 +18,6 @@ use crate::models::problem::{
     ActivityCost, Actor, Job, JobIdDimension, Single, TransportCost, TravelTime, VehicleIdDimension,
 };
 use crate::models::solution::Activity;
-use crate::utils::InfoLogger;
 use rosomaxa::prelude::{Float, UnwrapValue};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -32,7 +31,6 @@ const DEFAULT_MAX_ITERATIONS: usize = 1;
 const DEFAULT_ALLOW_UNUSED: bool = true;
 const DEFAULT_ALLOW_SWAPS: bool = true;
 const DEFAULT_LOG: bool = false;
-const DEBUG_FAILURE_LOG_LIMIT: usize = 5;
 const ESTIMATED_IMPROVEMENT_EPSILON: Cost = 1e-3;
 const MAX_EXACT_CANDIDATES_PER_ITERATION: usize = 32;
 
@@ -121,7 +119,6 @@ impl VehicleAllocation {
 
         let mut applied_moves = 0_usize;
         let started_at = Instant::now();
-        let mut debug_state = DebugLogState::new(DEBUG_FAILURE_LOG_LIMIT);
 
         for _ in 0..self.max_iterations {
             let route_infos = build_route_infos(
@@ -136,7 +133,6 @@ impl VehicleAllocation {
             let unused_actors = collect_unused_actors(&insertion_ctx);
             let mut stats = AllocationStats::new(route_infos.len(), unused_actors.len());
             stats.routes_missing_cost = route_infos.iter().filter(|info| info.cost.is_none()).count();
-            let logger = if self.log { Some(&insertion_ctx.environment.logger) } else { None };
             let best_candidate = find_best_exact_candidate(
                 &insertion_ctx,
                 route_infos.as_slice(),
@@ -144,8 +140,6 @@ impl VehicleAllocation {
                 self.allow_unused,
                 self.allow_swaps,
                 &mut stats,
-                logger,
-                &mut debug_state,
             );
 
             if self.log {
@@ -183,35 +177,6 @@ impl VehicleAllocation {
             let Some(candidate) = best_candidate else {
                 break;
             };
-
-            if self.log {
-                match &candidate.allocation {
-                    RepairAllocationMove::Swap { left_actor, right_actor, .. } => {
-                        (insertion_ctx.environment.logger)(
-                            format!(
-                                "vehicle swap applied: left={}, right={}, improvement={:.3}, cost_after={}",
-                                get_actor_id(left_actor),
-                                get_actor_id(right_actor),
-                                candidate.allocation.improvement(),
-                                format_cost(candidate.cost)
-                            )
-                            .as_str(),
-                        );
-                    }
-                    RepairAllocationMove::Reassign { source_actor, candidate_actor, .. } => {
-                        (insertion_ctx.environment.logger)(
-                            format!(
-                                "vehicle reassign applied: source={}, target={}, improvement={:.3}, cost_after={}",
-                                get_actor_id(source_actor),
-                                get_actor_id(candidate_actor),
-                                candidate.allocation.improvement(),
-                                format_cost(candidate.cost)
-                            )
-                            .as_str(),
-                        );
-                    }
-                }
-            }
 
             insertion_ctx = candidate.insertion_ctx;
             applied_moves += 1;
@@ -283,29 +248,8 @@ struct RouteInfo {
 }
 
 struct ExactAllocationCandidate {
-    allocation: RepairAllocationMove,
     insertion_ctx: InsertionContext,
     cost: Option<Cost>,
-}
-
-struct DebugLogState {
-    remaining: usize,
-}
-
-impl DebugLogState {
-    fn new(remaining: usize) -> Self {
-        Self { remaining }
-    }
-
-    fn log(&mut self, logger: Option<&InfoLogger>, message: String) {
-        if self.remaining == 0 {
-            return;
-        }
-        if let Some(logger) = logger {
-            (logger)(message.as_str());
-        }
-        self.remaining = self.remaining.saturating_sub(1);
-    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -315,20 +259,8 @@ enum PrefilterReason {
     TimeWindow,
 }
 
-impl PrefilterReason {
-    fn label(self) -> &'static str {
-        match self {
-            PrefilterReason::VehicleId => "vehicle_id",
-            PrefilterReason::Skills => "skills",
-            PrefilterReason::TimeWindow => "time_window",
-        }
-    }
-}
-
 struct PrefilterFailure {
     reason: PrefilterReason,
-    job: Job,
-    details: String,
 }
 
 #[derive(Default)]
@@ -461,8 +393,6 @@ fn find_best_exact_candidate(
     allow_unused: bool,
     allow_swaps: bool,
     stats: &mut AllocationStats,
-    logger: Option<&InfoLogger>,
-    debug_state: &mut DebugLogState,
 ) -> Option<ExactAllocationCandidate> {
     let baseline_signature = collect_job_signature(insertion_ctx);
     let mut best_candidate = None;
@@ -492,16 +422,6 @@ fn find_best_exact_candidate(
                     PrefilterReason::Skills => stats.prefilter_skills += 1,
                     PrefilterReason::TimeWindow => stats.prefilter_time += 1,
                 }
-                debug_state.log(
-                    logger,
-                    format!(
-                        "vehicle allocation prefilter reject: route_idx={route_idx}, actor={}, job={}, reason={}, details={}",
-                        get_actor_id(actor),
-                        get_job_id(&failure.job),
-                        failure.reason.label(),
-                        failure.details
-                    ),
-                );
                 continue;
             }
 
@@ -538,16 +458,6 @@ fn find_best_exact_candidate(
                         PrefilterReason::Skills => stats.prefilter_skills += 1,
                         PrefilterReason::TimeWindow => stats.prefilter_time += 1,
                     }
-                    debug_state.log(
-                        logger,
-                        format!(
-                            "vehicle allocation prefilter reject: route_idx={left}, actor={}, job={}, reason={}, details={}",
-                            get_actor_id(&right_info.actor),
-                            get_job_id(&failure.job),
-                            failure.reason.label(),
-                            failure.details
-                        ),
-                    );
                     continue;
                 }
 
@@ -558,16 +468,6 @@ fn find_best_exact_candidate(
                         PrefilterReason::Skills => stats.prefilter_skills += 1,
                         PrefilterReason::TimeWindow => stats.prefilter_time += 1,
                     }
-                    debug_state.log(
-                        logger,
-                        format!(
-                            "vehicle allocation prefilter reject: route_idx={right}, actor={}, job={}, reason={}, details={}",
-                            get_actor_id(&left_info.actor),
-                            get_job_id(&failure.job),
-                            failure.reason.label(),
-                            failure.details
-                        ),
-                    );
                     continue;
                 }
 
@@ -698,10 +598,6 @@ fn evaluate_exact_candidate(
 
     if !get_capacity_violations(&candidate_ctx).is_empty() {
         stats.capacity_rejected += 1;
-        log_capacity_violations(
-            &candidate_ctx,
-            "vehicle allocation warning: rejecting candidate with capacity violation",
-        );
         return None;
     }
 
@@ -710,11 +606,7 @@ fn evaluate_exact_candidate(
     }
 
     stats.exact_improving += 1;
-    Some(ExactAllocationCandidate {
-        allocation: allocation.clone(),
-        insertion_ctx: candidate_ctx,
-        cost: Some(candidate_cost),
-    })
+    Some(ExactAllocationCandidate { insertion_ctx: candidate_ctx, cost: Some(candidate_cost) })
 }
 
 fn try_apply_exact_swap(
@@ -874,14 +766,14 @@ fn prefilter_actor_for_order(actor: &Actor, order: &[(Job, Arc<Single>)]) -> Opt
         actor.detail.start.as_ref().map(|start| start.time.to_time_window().start).unwrap_or(actor.detail.time.start);
 
     for (job, _) in order.iter() {
-        if let Some(details) = check_vehicle_id_mismatch(actor, job) {
-            return Some(PrefilterFailure { reason: PrefilterReason::VehicleId, job: job.clone(), details });
+        if check_vehicle_id_mismatch(actor, job).is_some() {
+            return Some(PrefilterFailure { reason: PrefilterReason::VehicleId });
         }
-        if let Some(details) = check_skill_mismatch(actor, job) {
-            return Some(PrefilterFailure { reason: PrefilterReason::Skills, job: job.clone(), details });
+        if check_skill_mismatch(actor, job).is_some() {
+            return Some(PrefilterFailure { reason: PrefilterReason::Skills });
         }
-        if let Some(details) = check_time_window_mismatch(actor, job, date) {
-            return Some(PrefilterFailure { reason: PrefilterReason::TimeWindow, job: job.clone(), details });
+        if check_time_window_mismatch(actor, job, date).is_some() {
+            return Some(PrefilterFailure { reason: PrefilterReason::TimeWindow });
         }
     }
 
